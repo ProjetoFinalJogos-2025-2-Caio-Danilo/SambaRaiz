@@ -46,7 +46,7 @@ O jogo une entretenimento e aprendizado, criando uma experiência imersiva onde 
 
 ## 🛠️ Tecnologias Utilizadas
 - Linguagem de programação: C
-- Frameworks/Bibliotecas: SDL2, SDL2_GFX
+- Frameworks/Bibliotecas: SDL2, SDL2_GFX, SDL2_Image, SDL2_Mixer
 - Sistema de som para instrumentos interativos
 - Interface gráfica para feedback visual e pontuação
 
