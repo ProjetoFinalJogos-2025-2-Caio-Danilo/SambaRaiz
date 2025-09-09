@@ -4,6 +4,7 @@
 #include <SDL2/SDL_mixer.h>
 #include "defs.h"
 #include "game.h"
+#include "auxFuncs/auxWaitEvent.h"
 
 int main(int argc, char* argv[]) {
     // Inicialização da SDL e suas bibliotecas
@@ -44,7 +45,8 @@ int main(int argc, char* argv[]) {
     while (Game_IsRunning()) {
         // Lida com eventos
         SDL_Event e;
-        while (SDL_PollEvent(&e)) {
+        Uint32 timeout = 16;
+        if (AUX_WaitEventTimeout(&e, &timeout)) {
             Game_HandleEvent(&e);
         }
 
