@@ -9,6 +9,7 @@
 typedef struct {
     SDL_KeyCode tecla;
     SDL_Rect rect;
+    float feedbackTimer;
 } Checker;
 
 // --- Estado Interno do Jogo (variáveis estáticas) ---
@@ -67,9 +68,18 @@ void Game_HandleEvent(SDL_Event* e) {
                 Nota* nota = &s_faseAtual->beatmap[i];
                 if (nota->estado == NOTA_ATIVA && nota->tecla == teclaPressionada) {
                     float checker_pos_x = 0;
-                    if (teclaPressionada == SDLK_z) checker_pos_x = CHECKER_Z_X;
-                    if (teclaPressionada == SDLK_x) checker_pos_x = CHECKER_X_X;
-                    if (teclaPressionada == SDLK_c) checker_pos_x = CHECKER_C_X;
+                    if (teclaPressionada == SDLK_z){
+                        checker_pos_x = CHECKER_Z_X;
+                        s_checkers[0].feedbackTimer = 0.15f; 
+                    }
+                    if (teclaPressionada == SDLK_x){
+                        checker_pos_x = CHECKER_X_X;
+                        s_checkers[1].feedbackTimer = 0.15f;
+                    }
+                    if (teclaPressionada == SDLK_c){ 
+                        checker_pos_x = CHECKER_C_X;
+                        s_checkers[2].feedbackTimer = 0.15f;
+                    }
 
                     if (fabs(nota->pos.x - checker_pos_x) <= HIT_WINDOW) {
                         nota->estado = NOTA_ATINGIDA;
@@ -117,6 +127,13 @@ void Game_Update(float deltaTime) {
             }
         }
     }
+
+    // Atualiza os timers de feedback dos checkers
+    for (int i = 0; i < 3; ++i) {
+        if (s_checkers[i].feedbackTimer > 0) {
+            s_checkers[i].feedbackTimer -= deltaTime;
+        }
+    }
 }
 
 void Game_Render(SDL_Renderer* renderer) {
@@ -127,12 +144,19 @@ void Game_Render(SDL_Renderer* renderer) {
 
     // Render checkers
     for (int i = 0; i < 3; ++i) {
-        boxRGBA(renderer, s_checkers[i].rect.x, s_checkers[i].rect.y,
-                s_checkers[i].rect.x + s_checkers[i].rect.w,
-                s_checkers[i].rect.y + s_checkers[i].rect.h,
-                255, 255, 255, 100);
+        // Se o timer estiver ativo, desenha com cor sólida. Senão, semi-transparente.
+        if (s_checkers[i].feedbackTimer > 0) {
+            boxRGBA(renderer, s_checkers[i].rect.x, s_checkers[i].rect.y,
+                    s_checkers[i].rect.x + s_checkers[i].rect.w, s_checkers[i].rect.y + s_checkers[i].rect.h,
+                    255, 255, 255, 255); // Branco sólido
+        } else {
+            boxRGBA(renderer, s_checkers[i].rect.x, s_checkers[i].rect.y,
+                    s_checkers[i].rect.x + s_checkers[i].rect.w, s_checkers[i].rect.y + s_checkers[i].rect.h,
+                    255, 255, 255, 100); // Semi-transparente
+        }
+
         stringRGBA(renderer, s_checkers[i].rect.x + 20, s_checkers[i].rect.y + 20,
-                   (i == 0 ? "Z" : (i == 1 ? "X" : "C")), 255, 255, 255, 255);
+                   (i == 0 ? "Z" : (i == 1 ? "X" : "C")), 0, 0, 0, 255); // Texto preto para contrastar
     }
 
     // Render notas
