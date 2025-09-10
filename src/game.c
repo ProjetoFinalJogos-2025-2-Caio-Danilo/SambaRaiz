@@ -3,6 +3,7 @@
 #include "stage.h"
 #include "note.h"
 #include <stdio.h>
+#include <time.h>
 #include <SDL2/SDL2_gfxPrimitives.h>
 #include <SDL2/SDL_ttf.h>
 
@@ -12,20 +13,50 @@ typedef struct {
     float isPressedTimer;
 } Checker;
 
+typedef struct {
+    int isActive;
+    SDL_Rect srcRect;       
+    SDL_FRect pos;
+    float lifetime;
+    float timeAlive;
+} HitAnimation;
+
 // --- Estado Interno do Jogo (variáveis estáticas) ---
+
+#define MAX_HIT_ANIMATIONS 32
+#define HIT_FRAME_WIDTH 384
+#define HIT_FRAME_HEIGHT 512
+#define HIT_FRAME_COUNT 8
+#define HIT_FRAME_COLS 4
+
 static Fase* s_faseAtual = NULL;
 static Checker s_checkers[3];
 static int s_gameIsRunning = 1;
 static int s_score = 0;
 static int s_combo = 0;
 static TTF_Font* s_font = NULL;
+static SDL_Texture* s_hitSpritesheet = NULL;
+static HitAnimation s_hitAnimations[MAX_HIT_ANIMATIONS];
 
 // --- Implementação das Funções ---
 
+static void SpawnHitAnimation(SDL_Rect checkerPos);
+
 int Game_Init(SDL_Renderer* renderer) {
+
+    // Inicializa o gerador de números aleatórios
+    srand(time(NULL));
+
     // Inicializa TTF
     if (TTF_Init() == -1) {
         printf("Erro ao inicializar SDL2_ttf: %s\n", TTF_GetError());
+        return 0;
+    }
+
+    // --- Carrega a sprite sheet ---
+    s_hitSpritesheet = IMG_LoadTexture(renderer, "assets/image/hitNotesSpriteSheet.png");
+    if (!s_hitSpritesheet) {
+        printf("Erro ao carregar a sprite sheet de acerto: %s\n", IMG_GetError());
         return 0;
     }
 
@@ -84,9 +115,14 @@ void Game_HandleEvent(SDL_Event* e) {
                     if (fabs(nota->pos.x - checker_pos_x) <= HIT_WINDOW) {
                         nota->estado = NOTA_ATINGIDA;
                         s_combo++;
-                        s_score += 100 * s_combo; // Pontuação base * combo
+                        s_score += 100 * s_combo;
                         printf("ACERTOU! Pontos: %d | Combo: %d\n", s_score, s_combo);
-                        break; 
+                        
+                        // Ativa animação das notas de acerto
+                        SDL_Rect checkerRect = {checker_pos_x, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT};
+                        SpawnHitAnimation(checkerRect);
+
+                        break;
                     }
                 }
             }
@@ -132,6 +168,20 @@ void Game_Update(float deltaTime) {
     for (int i = 0; i < 3; ++i) {
         if (s_checkers[i].isPressedTimer > 0) {
             s_checkers[i].isPressedTimer -= deltaTime;
+        }
+    }
+
+    for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
+        if (s_hitAnimations[i].isActive) {
+            HitAnimation* anim = &s_hitAnimations[i];
+            anim->timeAlive += deltaTime;
+
+            if (anim->timeAlive >= anim->lifetime) {
+                anim->isActive = 0;
+            } else {
+                // Move para cima
+                anim->pos.y -= 80.0f * deltaTime; 
+            }
         }
     }
 }
@@ -197,6 +247,21 @@ void Game_Render(SDL_Renderer* renderer) {
         Note_Render(&s_faseAtual->beatmap[i], renderer);
     }
 
+    // --- Renderiza as animações de acerto ---
+    for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
+        if (s_hitAnimations[i].isActive) {
+            HitAnimation* anim = &s_hitAnimations[i];
+            
+            float lifeRatio = anim->timeAlive / anim->lifetime;
+            Uint8 alpha = 255 * (1.0f - lifeRatio);
+
+            //Transparência da textura
+            SDL_SetTextureAlphaMod(s_hitSpritesheet, alpha);
+            SDL_RenderCopyF(renderer, s_hitSpritesheet, &anim->srcRect, &anim->pos);
+            SDL_SetTextureAlphaMod(s_hitSpritesheet, 255);
+        }
+    }
+
     // --- Renderizar score e combo ---
     SDL_Color white = {255, 255, 255, 255};
     SDL_Color gold = {255, 223, 0, 255};
@@ -226,8 +291,41 @@ void Game_Render(SDL_Renderer* renderer) {
     SDL_RenderPresent(renderer);
 }
 
+static void SpawnHitAnimation(SDL_Rect checkerPos) {
+    for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
+        if (!s_hitAnimations[i].isActive) {
+            HitAnimation* anim = &s_hitAnimations[i];
+            anim->isActive = 1;
+
+            // Escolhe um frame aleatório (0 a 7)
+            int frameIndex = rand() % HIT_FRAME_COUNT;
+
+            // Calcula posição do frame dentro da grade (4x2)
+            int col = frameIndex % HIT_FRAME_COLS;
+            int row = frameIndex / HIT_FRAME_COLS;
+
+            anim->srcRect.x = col * HIT_FRAME_WIDTH;
+            anim->srcRect.y = row * HIT_FRAME_HEIGHT;
+            anim->srcRect.w = HIT_FRAME_WIDTH;
+            anim->srcRect.h = HIT_FRAME_HEIGHT;
+
+            // Renderizar em 64x64 centralizado no checker
+            anim->pos.w = 64;
+            anim->pos.h = 64;
+            anim->pos.x = checkerPos.x + (checkerPos.w / 2) - (anim->pos.w / 2);
+            anim->pos.y = checkerPos.y - anim->pos.h;
+
+            anim->lifetime = 0.4f;
+            anim->timeAlive = 0.0f;
+            break;
+        }
+    }
+}
+
 void Game_Shutdown() {
     Fase_Liberar(s_faseAtual);
+
+    SDL_DestroyTexture(s_hitSpritesheet);
 
     if (s_font) {
         TTF_CloseFont(s_font);
