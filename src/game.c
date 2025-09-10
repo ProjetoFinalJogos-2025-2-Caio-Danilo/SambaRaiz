@@ -9,7 +9,7 @@
 typedef struct {
     SDL_KeyCode tecla;
     SDL_Rect rect;
-    float feedbackTimer;
+    float isPressedTimer;
 } Checker;
 
 // --- Estado Interno do Jogo (variáveis estáticas) ---
@@ -30,15 +30,15 @@ int Game_Init(SDL_Renderer* renderer) {
     }
 
     // Carrega a fase
-    s_faseAtual = Fase_Carregar(renderer);
+    s_faseAtual = Carregar_Fase_MeuLugar(renderer);
     if (!s_faseAtual) {
         return 0; // Falha ao carregar a fase
     }
 
     // Inicializa checkers
-    s_checkers[0] = (Checker){SDLK_z, {CHECKER_Z_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}};
-    s_checkers[1] = (Checker){SDLK_x, {CHECKER_X_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}};
-    s_checkers[2] = (Checker){SDLK_c, {CHECKER_C_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}};
+    s_checkers[0] = (Checker){SDLK_z, {CHECKER_Z_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
+    s_checkers[1] = (Checker){SDLK_x, {CHECKER_X_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
+    s_checkers[2] = (Checker){SDLK_c, {CHECKER_C_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
 
     // Inicia a música
     Mix_PlayMusic(s_faseAtual->musica, 0);
@@ -70,15 +70,15 @@ void Game_HandleEvent(SDL_Event* e) {
                     float checker_pos_x = 0;
                     if (teclaPressionada == SDLK_z){
                         checker_pos_x = CHECKER_Z_X;
-                        s_checkers[0].feedbackTimer = 0.15f; 
+                        s_checkers[0].isPressedTimer = 0.15f; 
                     }
                     if (teclaPressionada == SDLK_x){
                         checker_pos_x = CHECKER_X_X;
-                        s_checkers[1].feedbackTimer = 0.15f;
+                        s_checkers[1].isPressedTimer = 0.15f;
                     }
                     if (teclaPressionada == SDLK_c){ 
                         checker_pos_x = CHECKER_C_X;
-                        s_checkers[2].feedbackTimer = 0.15f;
+                        s_checkers[2].isPressedTimer = 0.15f;
                     }
 
                     if (fabs(nota->pos.x - checker_pos_x) <= HIT_WINDOW) {
@@ -130,8 +130,8 @@ void Game_Update(float deltaTime) {
 
     // Atualiza os timers de feedback dos checkers
     for (int i = 0; i < 3; ++i) {
-        if (s_checkers[i].feedbackTimer > 0) {
-            s_checkers[i].feedbackTimer -= deltaTime;
+        if (s_checkers[i].isPressedTimer > 0) {
+            s_checkers[i].isPressedTimer -= deltaTime;
         }
     }
 }
@@ -140,20 +140,53 @@ void Game_Render(SDL_Renderer* renderer) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
+    // Desenha Background Principal
     SDL_RenderCopy(renderer, s_faseAtual->background, NULL, NULL);
+
+    // Desenha a pista de ritmo
+    SDL_Rect trackRect = {RHYTHM_TRACK_POS_X, RHYTHM_TRACK_POS_Y, RHYTHM_TRACK_WIDTH, RHYTHM_TRACK_HEIGHT};
+    SDL_RenderCopy(renderer, s_faseAtual->rhythmTrack, NULL, &trackRect);
+    rectangleRGBA(renderer, trackRect.x, trackRect.y,
+                  trackRect.x + trackRect.w, trackRect.y + trackRect.h,
+                  255, 255, 255, 180); 
 
     // Render checkers
     for (int i = 0; i < 3; ++i) {
-        // Se o timer estiver ativo, desenha com cor sólida. Senão, semi-transparente.
-        if (s_checkers[i].feedbackTimer > 0) {
-            boxRGBA(renderer, s_checkers[i].rect.x, s_checkers[i].rect.y,
+
+        // 1. Define a cor específica para a borda de cada checker
+        Uint8 r = 255, g = 255, b = 255; // Cor padrão (branco)
+        if (s_checkers[i].tecla == SDLK_z) { r = 255; g = 50; b = 50; }   // Vermelho para Z
+        if (s_checkers[i].tecla == SDLK_x) { r = 50; g = 255; b = 50; }   // Verde para X
+        if (s_checkers[i].tecla == SDLK_c) { r = 50; g = 50; b = 255; }   // Azul para C
+
+        // 2. Desenha a borda colorida (sempre visível)
+        rectangleRGBA(renderer,
+                    s_checkers[i].rect.x, s_checkers[i].rect.y,
                     s_checkers[i].rect.x + s_checkers[i].rect.w, s_checkers[i].rect.y + s_checkers[i].rect.h,
-                    255, 255, 255, 255); // Branco sólido
-        } else {
+                    r, g, b, 255); // Borda com cor sólida
+        rectangleRGBA(renderer,
+                    s_checkers[i].rect.x + 1, s_checkers[i].rect.y + 1,
+                    s_checkers[i].rect.x + s_checkers[i].rect.w + 1, s_checkers[i].rect.y + s_checkers[i].rect.h + 1,
+                    r, g, b, 255); // Borda com cor sólida
+
+
+        // Se o timer estiver ativo, desenha com cor sólida. Senão, semi-transparente.
+        if (s_checkers[i].isPressedTimer > 0) {
+        boxRGBA(renderer,
+                s_checkers[i].rect.x + 1, s_checkers[i].rect.y + 1,
+                s_checkers[i].rect.x + s_checkers[i].rect.w - 1, s_checkers[i].rect.y + s_checkers[i].rect.h - 1,
+                255, 255, 255, 150); // Preenchimento branco semi-transparente
+        }else {
             boxRGBA(renderer, s_checkers[i].rect.x, s_checkers[i].rect.y,
                     s_checkers[i].rect.x + s_checkers[i].rect.w, s_checkers[i].rect.y + s_checkers[i].rect.h,
                     255, 255, 255, 100); // Semi-transparente
         }
+
+        // Desenha o texto da tecla ABAIXO do checker
+        const char* keyText = NULL;
+        if (s_checkers[i].tecla == SDLK_z) keyText = "Z";
+        if (s_checkers[i].tecla == SDLK_x) keyText = "X";
+        if (s_checkers[i].tecla == SDLK_c) keyText = "C";
 
         stringRGBA(renderer, s_checkers[i].rect.x + 20, s_checkers[i].rect.y + 20,
                    (i == 0 ? "Z" : (i == 1 ? "X" : "C")), 0, 0, 0, 255); // Texto preto para contrastar

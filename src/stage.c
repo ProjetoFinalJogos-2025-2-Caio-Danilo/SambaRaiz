@@ -7,9 +7,10 @@ Fase* Fase_Carregar(SDL_Renderer* renderer) {
     if (!fase) return NULL;
 
     fase->background = IMG_LoadTexture(renderer, "assets/image/rjbg.jpg");
+     fase->rhythmTrack = IMG_LoadTexture(renderer, "assets/image/rhythmTrack.png");
     fase->musica = Mix_LoadMUS("assets/music/song.wav");
 
-    if (!fase->background || !fase->musica) {
+    if (!fase->background || !fase->musica || !fase->rhythmTrack) {
         printf("Erro ao carregar recursos da fase: %s\n", SDL_GetError());
         Fase_Liberar(fase);
         return NULL;
@@ -35,6 +36,7 @@ Fase* Fase_Carregar(SDL_Renderer* renderer) {
 void Fase_Liberar(Fase* fase) {
     if (fase) {
         SDL_DestroyTexture(fase->background);
+        SDL_DestroyTexture(fase->rhythmTrack);
         Mix_FreeMusic(fase->musica);
         free(fase);
     }
