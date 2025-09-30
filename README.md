@@ -1,5 +1,9 @@
 # 🎶 Samba Raiz
 
+<p align="center">
+  <img src="./CapaSambaRaiz.png" alt="Capa do Jogo" width="600">
+</p>
+
 **Samba Raiz** é um jogo de ritmo educativo e histórico que celebra a cultura do samba no Brasil. O projeto combina diversão e aprendizado, permitindo que os jogadores interajam com instrumentos típicos e conheçam os personagens e momentos marcantes da história do samba.
 
 ---
