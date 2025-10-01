@@ -38,6 +38,8 @@ static int s_combo = 0;
 static TTF_Font* s_font = NULL;
 static SDL_Texture* s_hitSpritesheet = NULL;
 static HitAnimation s_hitAnimations[MAX_HIT_ANIMATIONS];
+static SDL_Texture* s_checkerContornoTex[3] = {NULL, NULL, NULL}; // NOVO: Array para as texturas dos contornos
+
 
 // --- Implementação das Funções ---
 
@@ -59,6 +61,16 @@ int Game_Init(SDL_Renderer* renderer) {
     if (!s_hitSpritesheet) {
         printf("Erro ao carregar a sprite sheet de acerto: %s\n", IMG_GetError());
         return 0;
+    }
+
+    // Carrega as texturas dos contornos dos checkers
+    s_checkerContornoTex[0] = IMG_LoadTexture(renderer, "assets/image/redContorno.png");   // Para Z
+    s_checkerContornoTex[1] = IMG_LoadTexture(renderer, "assets/image/greenContorno.png"); // Para X
+    s_checkerContornoTex[2] = IMG_LoadTexture(renderer, "assets/image/blueContorno.png");  // Para C
+
+    if (!s_checkerContornoTex[0] || !s_checkerContornoTex[1] || !s_checkerContornoTex[2]) {
+        printf("Erro ao carregar uma ou mais texturas de contorno: %s\n", IMG_GetError());
+        return 0; // Falha na inicialização
     }
 
     // Carrega a fase
@@ -98,6 +110,7 @@ void Game_HandleEvent(SDL_Event* e) {
             // Identifica qual checker foi ativado
             int checkerIndex = -1;
             switch (teclaPressionada) {
+                case SDLK_ESCAPE: s_gameIsRunning = 0;
                 case SDLK_z: checkerIndex = 0; break;
                 case SDLK_x: checkerIndex = 1; break;
                 case SDLK_c: checkerIndex = 2; break;
@@ -220,45 +233,50 @@ void Game_Render(SDL_Renderer* renderer) {
 
     // Render checkers
     for (int i = 0; i < 3; ++i) {
+        Checker* checker = &s_checkers[i];
 
-        // 1. Define a cor específica para a borda de cada checker
-        Uint8 r = 255, g = 255, b = 255; // Cor padrão (branco)
-        if (s_checkers[i].tecla == SDLK_z) { r = 255; g = 50; b = 50; }   // Vermelho para Z
-        if (s_checkers[i].tecla == SDLK_x) { r = 50; g = 255; b = 50; }   // Verde para X
-        if (s_checkers[i].tecla == SDLK_c) { r = 50; g = 50; b = 255; }   // Azul para C
+        // Calcula o centro do checker para desenhar círculos
+        Sint16 centerX = checker->rect.x + (checker->rect.w / 2);
+        Sint16 centerY = checker->rect.y + (checker->rect.h / 2);
+        Sint16 radius = checker->rect.w / 2; // Raio do círculo
 
-        // 2. Desenha a borda colorida (sempre visível)
-        rectangleRGBA(renderer,
-                    s_checkers[i].rect.x, s_checkers[i].rect.y,
-                    s_checkers[i].rect.x + s_checkers[i].rect.w, s_checkers[i].rect.y + s_checkers[i].rect.h,
-                    r, g, b, 255); // Borda com cor sólida
-        rectangleRGBA(renderer,
-                    s_checkers[i].rect.x + 1, s_checkers[i].rect.y + 1,
-                    s_checkers[i].rect.x + s_checkers[i].rect.w + 1, s_checkers[i].rect.y + s_checkers[i].rect.h + 1,
-                    r, g, b, 255); // Borda com cor sólida
+        // Define a área de desenho para a textura do contorno
+        SDL_Rect contourDstRect = {
+            checker->rect.x - CHECKER_CONTOUR_OFFSET_X,
+            checker->rect.y - CHECKER_CONTOUR_OFFSET_Y,
+            CHECKER_CONTOUR_WIDTH,
+            CHECKER_CONTOUR_HEIGHT
+        };
 
+        // Desenha a imagem do contorno primeiro, para que o preenchimento fique por cima
+        SDL_RenderCopy(renderer, s_checkerContornoTex[i], NULL, &contourDstRect);
 
-        // Se o timer estiver ativo, desenha com cor sólida. Senão, semi-transparente.
-        if (s_checkers[i].isPressedTimer > 0) {
-        boxRGBA(renderer,
-                s_checkers[i].rect.x + 1, s_checkers[i].rect.y + 1,
-                s_checkers[i].rect.x + s_checkers[i].rect.w - 1, s_checkers[i].rect.y + s_checkers[i].rect.h - 1,
-                255, 255, 255, 150); // Preenchimento branco semi-transparente
-        }else {
-            boxRGBA(renderer, s_checkers[i].rect.x, s_checkers[i].rect.y,
-                    s_checkers[i].rect.x + s_checkers[i].rect.w, s_checkers[i].rect.y + s_checkers[i].rect.h,
-                    255, 255, 255, 100); // Semi-transparente
+        // Desenha o preenchimento interno do checker
+        if (checker->isPressedTimer > 0) {
+            // Preenchimento branco e mais visível no highlight
+            filledCircleRGBA(renderer, centerX, centerY, radius, 255, 255, 255, 150); // Raio -2 para ter uma pequena borda
+        } else {
+            // Preenchimento padrão, mais sutil
+            filledCircleRGBA(renderer, centerX, centerY, radius, 255, 255, 255, 70); // Raio -2 para ter uma pequena borda
         }
 
-        // Desenha o texto da tecla ABAIXO do checker
-        const char* keyText = NULL;
-        if (s_checkers[i].tecla == SDLK_z) keyText = "Z";
-        if (s_checkers[i].tecla == SDLK_x) keyText = "X";
-        if (s_checkers[i].tecla == SDLK_c) keyText = "C";
-
-        stringRGBA(renderer, s_checkers[i].rect.x + 20, s_checkers[i].rect.y + 20,
-                   (i == 0 ? "Z" : (i == 1 ? "X" : "C")), 0, 0, 0, 255); // Texto preto para contrastar
+        // Desenha o texto da tecla (Z, X, C) no centro do círculo
+        const char* keyText = (i == 0) ? "Z" : ((i == 1) ? "X" : "C");
+        SDL_Surface* textSurface = TTF_RenderText_Blended(s_font, keyText, (SDL_Color){0, 0, 0, 255}); // Texto preto
+        if (textSurface) {
+            SDL_Texture* textTexture = SDL_CreateTextureFromSurface(renderer, textSurface);
+            SDL_Rect textRect = {
+                centerX - (textSurface->w / 2),
+                centerY - (textSurface->h / 2),
+                textSurface->w,
+                textSurface->h
+            };
+            SDL_RenderCopy(renderer, textTexture, NULL, &textRect);
+            SDL_FreeSurface(textSurface);
+            SDL_DestroyTexture(textTexture);
+        }
     }
+
 
     // Render notas
     for (int i = 0; i < s_faseAtual->totalNotas; ++i) {
@@ -342,6 +360,13 @@ static void SpawnHitAnimation(SDL_Rect checkerPos) {
 
 void Game_Shutdown() {
     Fase_Liberar(s_faseAtual);
+
+    // Libera as texturas dos contornos 
+    for (int i = 0; i < 3; i++) {
+        if (s_checkerContornoTex[i]) {
+            SDL_DestroyTexture(s_checkerContornoTex[i]);
+        }
+    }
 
     SDL_DestroyTexture(s_hitSpritesheet);
 

@@ -31,9 +31,14 @@ void Note_Render(const Nota* nota, SDL_Renderer* renderer) {
         if (nota->tecla == SDLK_x) { r = 50; b = 50; }   // X = Verde
         if (nota->tecla == SDLK_c) { r = 50; g = 50; }   // C = Azul
 
-        boxRGBA(renderer,
-                (Sint16)nota->pos.x, (Sint16)nota->pos.y,
-                (Sint16)(nota->pos.x + nota->pos.w), (Sint16)(nota->pos.y + nota->pos.h),
-                r, g, b, 255);
+        // Calcular o centro e o raio para o círculo
+        Sint16 centerX = (Sint16)(nota->pos.x + nota->pos.w / 2);
+        Sint16 centerY = (Sint16)(nota->pos.y + nota->pos.h / 2);
+        Sint16 radius = (Sint16)(nota->pos.w / 2);
+
+        // Desenha a nota como um círculo preenchido
+        filledCircleRGBA(renderer, centerX, centerY, radius, r, g, b, 255);
+        
+        aacircleRGBA(renderer, centerX, centerY, radius, 255, 255, 255, 255); // Contorno branco
     }
 }
