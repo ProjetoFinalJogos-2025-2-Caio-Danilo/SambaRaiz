@@ -1,2 +1,7 @@
 /output
 .vscode/
+
+# Objetos do MakeFile *
+*/*.o
+*/Songs/*.o
+*/auxFuncs/*.o

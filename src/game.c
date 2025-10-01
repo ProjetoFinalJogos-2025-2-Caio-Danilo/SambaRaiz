@@ -4,6 +4,7 @@
 #include "note.h"
 #include <stdio.h>
 #include <time.h>
+#include <stdbool.h> 
 #include <SDL2/SDL2_gfxPrimitives.h>
 #include <SDL2/SDL_ttf.h>
 
@@ -85,49 +86,66 @@ int Game_Init(SDL_Renderer* renderer) {
 }
 
 void Game_HandleEvent(SDL_Event* e) {
-    if (e->type == SDL_QUIT) {
-        s_gameIsRunning = 0;
-    }
-    if (e->type == SDL_KEYDOWN) {
-        if (e->key.keysym.sym == SDLK_ESCAPE) {
-            s_gameIsRunning = 0;
-        }
+    
+    switch (e->type){
 
-        SDL_KeyCode teclaPressionada = e->key.keysym.sym;
-        if (teclaPressionada == SDLK_z || teclaPressionada == SDLK_x || teclaPressionada == SDLK_c) {
+        case SDL_QUIT:
+            s_gameIsRunning = 0;
+        
+        case SDL_KEYDOWN:
+            SDL_KeyCode teclaPressionada = e->key.keysym.sym;
+
+            // Identifica qual checker foi ativado
+            int checkerIndex = -1;
+            switch (teclaPressionada) {
+                case SDLK_z: checkerIndex = 0; break;
+                case SDLK_x: checkerIndex = 1; break;
+                case SDLK_c: checkerIndex = 2; break;
+                default:
+                    // Se não for uma tecla do jogo, encerra o evento.
+                    return; 
+            }
+
+            // Com o checker identificado, executa a lógica principal
+            Checker* checker = &s_checkers[checkerIndex];
+
+            // Ativa o highlight visual do checker 
+            checker->isPressedTimer = 0.15f;
+
+            bool acertouNota = false;
+
+            // Procura por uma nota correspondente para o checker ativado
             for (int i = 0; i < s_faseAtual->totalNotas; ++i) {
                 Nota* nota = &s_faseAtual->beatmap[i];
-                if (nota->estado == NOTA_ATIVA && nota->tecla == teclaPressionada) {
-                    float checker_pos_x = 0;
-                    if (teclaPressionada == SDLK_z){
-                        checker_pos_x = CHECKER_Z_X;
-                        s_checkers[0].isPressedTimer = 0.15f; 
-                    }
-                    if (teclaPressionada == SDLK_x){
-                        checker_pos_x = CHECKER_X_X;
-                        s_checkers[1].isPressedTimer = 0.15f;
-                    }
-                    if (teclaPressionada == SDLK_c){ 
-                        checker_pos_x = CHECKER_C_X;
-                        s_checkers[2].isPressedTimer = 0.15f;
-                    }
 
-                    if (fabs(nota->pos.x - checker_pos_x) <= HIT_WINDOW) {
-                        nota->estado = NOTA_ATINGIDA;
-                        s_combo++;
-                        s_score += 100 * s_combo;
-                        printf("ACERTOU! Pontos: %d | Combo: %d\n", s_score, s_combo);
-                        
-                        // Ativa animação das notas de acerto
-                        SDL_Rect checkerRect = {checker_pos_x, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT};
-                        SpawnHitAnimation(checkerRect);
+                // Pula notas que não estão ativas ou não são para esta tecla
+                if (nota->estado != NOTA_ATIVA || nota->tecla != checker->tecla) {
+                    continue;
+                }
 
-                        break;
-                    }
+                // Calcula a distância usando a posição do checker que já temos
+                float dist = fabsf(nota->pos.x - checker->rect.x);
+
+                if (dist <= HIT_WINDOW) {
+                    nota->estado = NOTA_ATINGIDA;
+                    acertouNota = true;
+                    s_combo++;
+                    s_score += 100 * (s_combo > 0 ? s_combo : 1);
+                    printf("ACERTOU! Pontos: %d | Combo: %d\n", s_score, s_combo);
+                    
+                    SpawnHitAnimation(checker->rect); 
+                    break;
                 }
             }
-        }
+
+            // Se o loop terminou e nenhuma nota foi acertada, foi um erro
+            if (!acertouNota) {
+                s_combo = 0;
+                printf("ERROU! Combo resetado.\n");
+            }
+            break;
     }
+
 }
 
 void Game_Update(float deltaTime) {
