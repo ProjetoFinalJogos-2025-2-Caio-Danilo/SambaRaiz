@@ -22,6 +22,14 @@ typedef struct {
     float timeAlive;
 } HitAnimation;
 
+typedef struct {
+    bool isActive;
+    SDL_FRect pos;
+    SDL_FPoint velocity;
+    SDL_Color color;
+    float lifetime;
+} ConfettiParticle;
+
 // --- Estado Interno do Jogo (variáveis estáticas) ---
 
 #define MAX_HIT_ANIMATIONS 32
@@ -29,6 +37,9 @@ typedef struct {
 #define HIT_FRAME_HEIGHT 512
 #define HIT_FRAME_COUNT 8
 #define HIT_FRAME_COLS 4
+
+#define MAX_CONFETTI 200      // Máximo de partículas na tela
+#define SPECIAL_DURATION 10.0f // Duração do especial em segundos
 
 static Fase* s_faseAtual = NULL;
 static Checker s_checkers[3];
@@ -41,17 +52,31 @@ static HitAnimation s_hitAnimations[MAX_HIT_ANIMATIONS];
 static SDL_Texture* s_checkerContornoTex[3] = {NULL, NULL, NULL}; //Array para as texturas dos contornos
 static float s_health = 100.0f; // Vida do jogador (de 0.0 a 100.0)
 static bool s_isGameOver = false; // Flag para controlar o fim de jogo
+static float s_specialMeter = 0.0f;   // Medidor de 0.0 a 100.0 para o Especial
+static bool s_isSpecialActive = false; //Check do Especial se está ativo
+static float s_specialTimer = 0.0f; // Tempo do Especial
+static ConfettiParticle s_confetti[MAX_CONFETTI];
+
 
 
 // --- Implementação das Funções ---
 
 static void SpawnHitAnimation(SDL_Rect checkerPos);
+static void SpawnConfettiParticle();
 
 int Game_Init(SDL_Renderer* renderer) {
 
     //Garante Vida cheia ao iniciar o jogo.
     s_health = 100.0f;
     s_isGameOver = false;
+
+    // Inicializa o sistema de especial 
+    s_specialMeter = 0.0f;
+    s_isSpecialActive = false;
+    s_specialTimer = 0.0f;
+    for (int i = 0; i < MAX_CONFETTI; ++i) {
+        s_confetti[i].isActive = false;
+    }
 
     // Inicializa o gerador de números aleatórios
     srand(time(NULL));
@@ -134,10 +159,17 @@ void Game_HandleEvent(SDL_Event* e) {
             // Identifica qual checker foi ativado
             int checkerIndex = -1;
             switch (teclaPressionada) {
-                case SDLK_ESCAPE: s_gameIsRunning = 0;
+                case SDLK_ESCAPE: s_gameIsRunning = 0; return;
                 case SDLK_z: checkerIndex = 0; break;
                 case SDLK_x: checkerIndex = 1; break;
                 case SDLK_c: checkerIndex = 2; break;
+                case SDLK_SPACE:
+                    if (s_specialMeter >= 100.0f && !s_isSpecialActive) {
+                        s_isSpecialActive = true;
+                        s_specialTimer = SPECIAL_DURATION;
+                        printf("ESPECIAL ATIVADO!\n");
+                    }
+                    return;
                 default:
                     // Se não for uma tecla do jogo, encerra o evento.
                     return; 
@@ -167,7 +199,18 @@ void Game_HandleEvent(SDL_Event* e) {
                     nota->estado = NOTA_ATINGIDA;
                     acertouNota = true;
                     s_combo++;
-                    s_score += 100 * (s_combo > 0 ? s_combo : 1);
+
+                    int points = 100 * (s_combo > 0 ? s_combo : 1);
+                    if (s_isSpecialActive) {
+                        points *= 2; // Dobra os pontos se o especial estiver ativo
+                    }
+                    s_score += points;
+
+                    // Ganha especial ao acertar 
+                    if (!s_isSpecialActive) { // Só ganha especial se ele não estiver ativo
+                        s_specialMeter += 0.5f + (s_combo * 0.1f); // Ganho base + bônus de combo
+                        if (s_specialMeter > 100.0f) s_specialMeter = 100.0f; // Limita em 100
+                    }
 
                     //Recupera vida ao acertar ---
                     s_health += 2.0f; // Recupera 2% de vida
@@ -199,6 +242,40 @@ void Game_Update(float deltaTime) {
     if (!s_gameIsRunning || Mix_PlayingMusic() == 0) return;
 
     Uint32 tempoAtual = (Uint32)(Mix_GetMusicPosition(s_faseAtual->musica) * 1000.0);
+
+    // Lógica do Especial e dos Confetes 
+    if (s_isSpecialActive) {
+        s_specialTimer -= deltaTime;
+
+        // Atualiza o medidor para descer visualmente 
+        s_specialMeter = (s_specialTimer / SPECIAL_DURATION) * 100.0f;
+        
+        // Cria 2 partículas por frame durante o especial
+        SpawnConfettiParticle();
+        SpawnConfettiParticle();
+
+        if (s_specialTimer <= 0) {
+            s_isSpecialActive = false;
+            printf("Especial acabou.\n");
+        }
+    }
+
+    // Atualiza todas as partículas de confete ativas
+    for (int i = 0; i < MAX_CONFETTI; ++i) {
+        if (s_confetti[i].isActive) {
+            ConfettiParticle* p = &s_confetti[i];
+            p->lifetime -= deltaTime;
+            if (p->lifetime <= 0) {
+                p->isActive = false;
+                continue;
+            }
+            // Movimento
+            p->pos.x += p->velocity.x * deltaTime;
+            p->pos.y += p->velocity.y * deltaTime;
+            // "Gravidade" simples
+            p->velocity.y += 300.0f * deltaTime;
+        }
+    }
 
     // Spawner de notas
     if (s_faseAtual->proximaNotaIndex < s_faseAtual->totalNotas) {
@@ -329,7 +406,7 @@ void Game_Render(SDL_Renderer* renderer) {
         Note_Render(&s_faseAtual->beatmap[i], renderer);
     }
 
-    // --- Renderiza as animações de acerto ---
+    // Renderiza as animações de acerto
     for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
         if (s_hitAnimations[i].isActive) {
             HitAnimation* anim = &s_hitAnimations[i];
@@ -344,7 +421,18 @@ void Game_Render(SDL_Renderer* renderer) {
         }
     }
 
-    // --- Renderizar score e combo ---
+    // Renderiza os confetes (antes da UI)
+    for (int i = 0; i < MAX_CONFETTI; ++i) {
+        if (s_confetti[i].isActive) {
+            ConfettiParticle* p = &s_confetti[i];
+            boxRGBA(renderer, 
+                (Sint16)p->pos.x, (Sint16)p->pos.y,
+                (Sint16)(p->pos.x + p->pos.w), (Sint16)(p->pos.y + p->pos.h),
+                p->color.r, p->color.g, p->color.b, p->color.a);
+        }
+    }
+
+    // Renderizar score e combo 
     SDL_Color white = {255, 255, 255, 255};
     SDL_Color gold = {255, 223, 0, 255};
 
@@ -402,6 +490,31 @@ void Game_Render(SDL_Renderer* renderer) {
     // Desenha a borda da barra
     rectangleRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 255, 255, 255, 255);
 
+    // Renderizar Barra de Especial 
+    int specialBarWidth = 400;
+    int specialBarHeight = 15;
+    int specialBarX = (SCREEN_WIDTH / 2) - (specialBarWidth / 2);
+
+    // Posiciona a barra abaixo da pista de ritmo
+    int specialBarY = RHYTHM_TRACK_POS_Y + RHYTHM_TRACK_HEIGHT + 10; 
+
+    int currentSpecialWidth = (int)((s_specialMeter / 100.0f) * specialBarWidth);
+
+    // Cor da barra de especial (começa azul, fica dourada quando cheia)
+    SDL_Color specialColor = {0, 191, 255, 255}; // Azul
+    if (s_specialMeter >= 100.0f) {
+        specialColor = (SDL_Color){255, 223, 0, 255}; // Dourado
+    }
+
+    // Desenha o fundo e a borda
+    boxRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 50, 50, 50, 200);
+    // Desenha o preenchimento
+    if (currentSpecialWidth > 0) {
+        boxRGBA(renderer, specialBarX, specialBarY, specialBarX + currentSpecialWidth, specialBarY + specialBarHeight,
+                specialColor.r, specialColor.g, specialColor.b, 255);
+    }
+    rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
+
 
     // Mensagem de Game Over ---
     if (s_isGameOver && s_font) {
@@ -449,6 +562,37 @@ static void SpawnHitAnimation(SDL_Rect checkerPos) {
             anim->lifetime = 0.4f;
             anim->timeAlive = 0.0f;
             break;
+        }
+    }
+}
+
+static void SpawnConfettiParticle() {
+    for (int i = 0; i < MAX_CONFETTI; ++i) {
+        if (!s_confetti[i].isActive) {
+            ConfettiParticle* p = &s_confetti[i];
+            p->isActive = true;
+            p->lifetime = 2.0f + (rand() % 100) / 100.0f; // Vida de 2 a 3 segundos
+
+            // Posição inicial (nasce na lateral esquerda ou direita)
+            if (rand() % 2 == 0) { // Nasce na esquerda
+                p->pos.x = -10;
+                p->velocity.x = 100 + (rand() % 100); // Velocidade para a direita
+            } else { // Nasce na direita
+                p->pos.x = SCREEN_WIDTH + 10;
+                p->velocity.x = -100 - (rand() % 100); // Velocidade para a esquerda
+            }
+            p->pos.y = rand() % SCREEN_HEIGHT;
+            p->velocity.y = -100 - (rand() % 150); // Velocidade para cima
+
+            // Tamanho e cor aleatórios
+            p->pos.w = 5 + (rand() % 5);
+            p->pos.h = p->pos.w;
+            p->color.r = 100 + (rand() % 156);
+            p->color.g = 100 + (rand() % 156);
+            p->color.b = 100 + (rand() % 156);
+            p->color.a = 255;
+            
+            break; // Sai do loop após criar uma partícula
         }
     }
 }
