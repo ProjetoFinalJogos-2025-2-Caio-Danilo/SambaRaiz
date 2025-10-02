@@ -38,7 +38,9 @@ static int s_combo = 0;
 static TTF_Font* s_font = NULL;
 static SDL_Texture* s_hitSpritesheet = NULL;
 static HitAnimation s_hitAnimations[MAX_HIT_ANIMATIONS];
-static SDL_Texture* s_checkerContornoTex[3] = {NULL, NULL, NULL}; // NOVO: Array para as texturas dos contornos
+static SDL_Texture* s_checkerContornoTex[3] = {NULL, NULL, NULL}; //Array para as texturas dos contornos
+static float s_health = 100.0f; // Vida do jogador (de 0.0 a 100.0)
+static bool s_isGameOver = false; // Flag para controlar o fim de jogo
 
 
 // --- Implementação das Funções ---
@@ -46,6 +48,10 @@ static SDL_Texture* s_checkerContornoTex[3] = {NULL, NULL, NULL}; // NOVO: Array
 static void SpawnHitAnimation(SDL_Rect checkerPos);
 
 int Game_Init(SDL_Renderer* renderer) {
+
+    //Garante Vida cheia ao iniciar o jogo.
+    s_health = 100.0f;
+    s_isGameOver = false;
 
     // Inicializa o gerador de números aleatórios
     srand(time(NULL));
@@ -98,7 +104,25 @@ int Game_Init(SDL_Renderer* renderer) {
 }
 
 void Game_HandleEvent(SDL_Event* e) {
-    
+    if (s_isGameOver){
+        
+        //Conseguir fechar o jogo quando der GameOver, por enquanto deixarei assim.
+        switch (e->type){
+            case SDL_QUIT:
+                s_gameIsRunning = 0;
+        
+            case SDL_KEYDOWN:
+                SDL_KeyCode teclaPressionada = e->key.keysym.sym;
+
+                switch (teclaPressionada) {
+                    case SDLK_ESCAPE: s_gameIsRunning = 0;
+                    default:
+                        // Se não for uma tecla do jogo, encerra o evento.
+                        return; 
+                }
+        }
+        
+    }
     switch (e->type){
 
         case SDL_QUIT:
@@ -144,6 +168,11 @@ void Game_HandleEvent(SDL_Event* e) {
                     acertouNota = true;
                     s_combo++;
                     s_score += 100 * (s_combo > 0 ? s_combo : 1);
+
+                    //Recupera vida ao acertar ---
+                    s_health += 2.0f; // Recupera 2% de vida
+                    if (s_health > 100.0f) s_health = 100.0f; // Limita em 100%
+
                     printf("ACERTOU! Pontos: %d | Combo: %d\n", s_score, s_combo);
                     
                     SpawnHitAnimation(checker->rect); 
@@ -154,6 +183,10 @@ void Game_HandleEvent(SDL_Event* e) {
             // Se o loop terminou e nenhuma nota foi acertada, foi um erro
             if (!acertouNota) {
                 s_combo = 0;
+                // Perde vida ao errar
+                s_health -= 5.0f; // Perde 5% de vida
+                if (s_health < 0.0f) s_health = 0.0f;
+
                 printf("ERROU! Combo resetado.\n");
             }
             break;
@@ -162,6 +195,7 @@ void Game_HandleEvent(SDL_Event* e) {
 }
 
 void Game_Update(float deltaTime) {
+    if (s_isGameOver) return;
     if (!s_gameIsRunning || Mix_PlayingMusic() == 0) return;
 
     Uint32 tempoAtual = (Uint32)(Mix_GetMusicPosition(s_faseAtual->musica) * 1000.0);
@@ -190,6 +224,11 @@ void Game_Update(float deltaTime) {
             if (nota->pos.x < (checker_pos_x - HIT_WINDOW)) {
                 nota->estado = NOTA_PERDIDA;
                 s_combo = 0; // Zera combo
+
+                //Perde vida ao deixar nota passar
+                s_health -= 5.0f; // Perde 5% de vida
+                if (s_health < 0.0f) s_health = 0.0f;
+
                 printf("ERROU! Combo resetado.\n");
             }
         }
@@ -214,6 +253,13 @@ void Game_Update(float deltaTime) {
                 anim->pos.y -= 80.0f * deltaTime; 
             }
         }
+    }
+
+    // Checagem de Game Over ---
+    if (s_health <= 0 && !s_isGameOver) {
+        s_isGameOver = true;
+        Mix_HaltMusic();
+        printf("GAME OVER!\n");
     }
 }
 
@@ -322,6 +368,55 @@ void Game_Render(SDL_Renderer* renderer) {
         SDL_RenderCopy(renderer, texCombo, NULL, &dstCombo);
         SDL_FreeSurface(surfCombo);
         SDL_DestroyTexture(texCombo);
+    }
+
+    // Renderizar Barra de Vida ---
+
+    // Posição e dimensões da barra
+    int barWidth = 400;
+    int barHeight = 20;
+    int barX = (SCREEN_WIDTH / 2) - (barWidth / 2);
+    int barY = 20;
+
+    // Calcula a largura atual da vida
+    int currentHealthWidth = (int)((s_health / 100.0f) * barWidth);
+
+    // Define a cor da barra baseada na porcentagem de vida
+    SDL_Color healthColor = {50, 205, 50, 255}; // Verde
+    if (s_health < 50) {
+        healthColor = (SDL_Color){255, 215, 0, 255}; // Amarelo
+    }
+    if (s_health < 25) {
+        healthColor = (SDL_Color){220, 20, 60, 255}; // Vermelho
+    }
+
+    // Desenha o fundo da barra
+    boxRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 50, 50, 50, 200);
+
+    // Desenha o preenchimento da vida
+    if (currentHealthWidth > 0) {
+        boxRGBA(renderer, barX, barY, barX + currentHealthWidth, barY + barHeight, 
+                healthColor.r, healthColor.g, healthColor.b, 255);
+    }
+
+    // Desenha a borda da barra
+    rectangleRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 255, 255, 255, 255);
+
+
+    // Mensagem de Game Over ---
+    if (s_isGameOver && s_font) {
+        SDL_Color red = {255, 0, 0, 255};
+        SDL_Surface* surfGO = TTF_RenderText_Blended(s_font, "FIM DE JOGO", red);
+        SDL_Texture* texGO = SDL_CreateTextureFromSurface(renderer, surfGO);
+        SDL_Rect dstGO = {
+            SCREEN_WIDTH / 2 - surfGO->w / 2,
+            SCREEN_HEIGHT / 2 - surfGO->h / 2,
+            surfGO->w,
+            surfGO->h
+        };
+        SDL_RenderCopy(renderer, texGO, NULL, &dstGO);
+        SDL_FreeSurface(surfGO);
+        SDL_DestroyTexture(texGO);
     }
 
     SDL_RenderPresent(renderer);
