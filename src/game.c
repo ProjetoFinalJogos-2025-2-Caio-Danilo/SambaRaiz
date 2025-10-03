@@ -15,14 +15,6 @@ typedef struct {
 } Checker;
 
 typedef struct {
-    int isActive;
-    SDL_Rect srcRect;       
-    SDL_FRect pos;
-    float lifetime;
-    float timeAlive;
-} HitAnimation;
-
-typedef struct {
     bool isActive;
     SDL_FRect pos;
     SDL_FPoint velocity;
@@ -30,7 +22,15 @@ typedef struct {
     float lifetime;
 } ConfettiParticle;
 
-// --- Estado Interno do Jogo (variáveis estáticas) ---
+typedef struct {
+    bool isActive;
+    char text[16];
+    SDL_Color color;
+    SDL_FRect pos;
+    float lifetime;
+} FeedbackText;
+
+// Estado Interno do Jogo (variáveis estáticas)
 
 #define MAX_HIT_ANIMATIONS 32
 #define HIT_FRAME_WIDTH 384
@@ -41,28 +41,34 @@ typedef struct {
 #define MAX_CONFETTI 200      // Máximo de partículas na tela
 #define SPECIAL_DURATION 10.0f // Duração do especial em segundos
 
+#define MAX_FEEDBACK_TEXTS 5 // Permite que até 5 textos apareçam ao mesmo tempo
+
 static Fase* s_faseAtual = NULL;
 static Checker s_checkers[3];
 static int s_gameIsRunning = 1;
 static int s_score = 0;
 static int s_combo = 0;
+static float s_comboPulseTimer = 0.0f;
 static TTF_Font* s_font = NULL;
 static SDL_Texture* s_hitSpritesheet = NULL;
-static HitAnimation s_hitAnimations[MAX_HIT_ANIMATIONS];
 static SDL_Texture* s_checkerContornoTex[3] = {NULL, NULL, NULL}; //Array para as texturas dos contornos
+
 static float s_health = 100.0f; // Vida do jogador (de 0.0 a 100.0)
 static bool s_isGameOver = false; // Flag para controlar o fim de jogo
+
 static float s_specialMeter = 0.0f;   // Medidor de 0.0 a 100.0 para o Especial
 static bool s_isSpecialActive = false; //Check do Especial se está ativo
 static float s_specialTimer = 0.0f; // Tempo do Especial
 static ConfettiParticle s_confetti[MAX_CONFETTI];
 
+static FeedbackText s_feedbackTexts[MAX_FEEDBACK_TEXTS];
 
 
-// --- Implementação das Funções ---
 
-static void SpawnHitAnimation(SDL_Rect checkerPos);
+// Implementação das Funções 
+
 static void SpawnConfettiParticle();
+static void SpawnFeedbackText(const char* text, SDL_Color color, SDL_Rect checkerRect);
 
 int Game_Init(SDL_Renderer* renderer) {
 
@@ -195,30 +201,47 @@ void Game_HandleEvent(SDL_Event* e) {
                 // Calcula a distância usando a posição do checker que já temos
                 float dist = fabsf(nota->pos.x - checker->rect.x);
 
-                if (dist <= HIT_WINDOW) {
+                if (dist <= HIT_WINDOW_OK) { // Checa a janela mais larga primeiro
                     nota->estado = NOTA_ATINGIDA;
                     acertouNota = true;
                     s_combo++;
 
-                    int points = 100 * (s_combo > 0 ? s_combo : 1);
-                    if (s_isSpecialActive) {
-                        points *= 2; // Dobra os pontos se o especial estiver ativo
-                    }
-                    s_score += points;
-
-                    // Ganha especial ao acertar 
-                    if (!s_isSpecialActive) { // Só ganha especial se ele não estiver ativo
-                        s_specialMeter += 0.5f + (s_combo * 0.1f); // Ganho base + bônus de combo
-                        if (s_specialMeter > 100.0f) s_specialMeter = 100.0f; // Limita em 100
+                    if (s_combo > 0 && s_combo % 50 == 0) {
+                        s_comboPulseTimer = 0.3f;
                     }
 
-                    //Recupera vida ao acertar ---
-                    s_health += 2.0f; // Recupera 2% de vida
-                    if (s_health > 100.0f) s_health = 100.0f; // Limita em 100%
-
-                    printf("ACERTOU! Pontos: %d | Combo: %d\n", s_score, s_combo);
+                    int points = 0;
                     
-                    SpawnHitAnimation(checker->rect); 
+                    // Definir a precisão
+                    if (dist <= HIT_WINDOW_OTIMO) {
+                        // Recompensas de "Ótimo"
+                        points = 200;
+                        s_health += 2.0f;
+                        if (!s_isSpecialActive) { s_specialMeter += 0.75f + (s_combo * 0.1f); }
+                        SpawnFeedbackText("Otimo!", (SDL_Color){255, 223, 0, 255}, checker->rect);
+                    } else if (dist <= HIT_WINDOW_BOM) {
+                        // Recompensas de "Bom"
+                        points = 100;
+                        s_health += 1.0f;
+                        if (!s_isSpecialActive) { s_specialMeter += 0.5f + (s_combo * 0.1f); }
+                        SpawnFeedbackText("Bom", (SDL_Color){50, 205, 50, 255}, checker->rect);
+                    } else {
+                        //Recompensas de "Ok"
+                        points = 25;
+                        s_health += 0.5f; // Recupera menos vida
+                        if (!s_isSpecialActive) { s_specialMeter += 0.25f; } // Quase não ganha especial
+                        SpawnFeedbackText("Ok", (SDL_Color){192, 192, 192, 255}, checker->rect); // Cinza claro
+                    }
+                    
+                    // Limita a vida e o especial para não passarem de 100
+                    if (s_health > 100.0f) s_health = 100.0f;
+                    if (s_specialMeter > 100.0f) s_specialMeter = 100.0f;
+                    
+                    // Aplica os multiplicadores de combo e especial
+                    points *= (s_combo > 0 ? s_combo : 1);
+                    if (s_isSpecialActive) points *= 2;
+                    s_score += points;
+                    
                     break;
                 }
             }
@@ -298,7 +321,7 @@ void Game_Update(float deltaTime) {
             if (nota->tecla == SDLK_x) checker_pos_x = CHECKER_X_X;
             if (nota->tecla == SDLK_c) checker_pos_x = CHECKER_C_X;
 
-            if (nota->pos.x < (checker_pos_x - HIT_WINDOW)) {
+            if (nota->pos.x < (checker_pos_x - HIT_WINDOW_OK)) {
                 nota->estado = NOTA_PERDIDA;
                 s_combo = 0; // Zera combo
 
@@ -318,16 +341,20 @@ void Game_Update(float deltaTime) {
         }
     }
 
-    for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
-        if (s_hitAnimations[i].isActive) {
-            HitAnimation* anim = &s_hitAnimations[i];
-            anim->timeAlive += deltaTime;
+    // Atualiza timers de feedback 
+    if (s_comboPulseTimer > 0) {
+        s_comboPulseTimer -= deltaTime;
+    }
 
-            if (anim->timeAlive >= anim->lifetime) {
-                anim->isActive = 0;
+    for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
+        if (s_feedbackTexts[i].isActive) {
+            FeedbackText* ft = &s_feedbackTexts[i];
+            ft->lifetime -= deltaTime;
+            if (ft->lifetime <= 0) {
+                ft->isActive = false;
             } else {
-                // Move para cima
-                anim->pos.y -= 80.0f * deltaTime; 
+                // Efeito de subir e sumir
+                ft->pos.y -= 50.0f * deltaTime;
             }
         }
     }
@@ -406,21 +433,6 @@ void Game_Render(SDL_Renderer* renderer) {
         Note_Render(&s_faseAtual->beatmap[i], renderer);
     }
 
-    // Renderiza as animações de acerto
-    for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
-        if (s_hitAnimations[i].isActive) {
-            HitAnimation* anim = &s_hitAnimations[i];
-            
-            float lifeRatio = anim->timeAlive / anim->lifetime;
-            Uint8 alpha = 255 * (1.0f - lifeRatio);
-
-            //Transparência da textura
-            SDL_SetTextureAlphaMod(s_hitSpritesheet, alpha);
-            SDL_RenderCopyF(renderer, s_hitSpritesheet, &anim->srcRect, &anim->pos);
-            SDL_SetTextureAlphaMod(s_hitSpritesheet, 255);
-        }
-    }
-
     // Renderiza os confetes (antes da UI)
     for (int i = 0; i < MAX_CONFETTI; ++i) {
         if (s_confetti[i].isActive) {
@@ -429,6 +441,26 @@ void Game_Render(SDL_Renderer* renderer) {
                 (Sint16)p->pos.x, (Sint16)p->pos.y,
                 (Sint16)(p->pos.x + p->pos.w), (Sint16)(p->pos.y + p->pos.h),
                 p->color.r, p->color.g, p->color.b, p->color.a);
+        }
+    }
+
+    // Renderiza o texto de feedback (Ótimo/Bom/Ok) 
+    for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
+        if (s_feedbackTexts[i].isActive) {
+            FeedbackText* ft = &s_feedbackTexts[i];
+            SDL_Surface* surf = TTF_RenderText_Blended(s_font, ft->text, ft->color);
+            if (surf) {
+                SDL_Texture* tex = SDL_CreateTextureFromSurface(renderer, surf);
+                // Efeito de fade-out
+                Uint8 alpha = (Uint8)(255.0f * (ft->lifetime / 0.6f));
+                SDL_SetTextureAlphaMod(tex, alpha);
+
+                SDL_Rect dst = { (int)ft->pos.x - surf->w / 2, (int)ft->pos.y, surf->w, surf->h };
+                SDL_RenderCopy(renderer, tex, NULL, &dst);
+
+                SDL_FreeSurface(surf);
+                SDL_DestroyTexture(tex);
+            }
         }
     }
 
@@ -450,9 +482,25 @@ void Game_Render(SDL_Renderer* renderer) {
     if (s_combo > 1 && s_font) {
         char comboText[64];
         sprintf(comboText, "Combo: %d", s_combo);
+        
+        // Lógica do "pulso"
+        float scale = 1.0f;
+        if (s_comboPulseTimer > 0) {
+            // A escala vai de 1.5 para 1.0 rapidamente
+            scale = 1.0f + 0.5f * (s_comboPulseTimer / 0.3f);
+        }
+
         SDL_Surface* surfCombo = TTF_RenderText_Blended(s_font, comboText, gold);
         SDL_Texture* texCombo = SDL_CreateTextureFromSurface(renderer, surfCombo);
-        SDL_Rect dstCombo = {SCREEN_WIDTH/2 - surfCombo->w/2, 50, surfCombo->w, surfCombo->h};
+        
+        int w = (int)(surfCombo->w * scale);
+        int h = (int)(surfCombo->h * scale);
+        SDL_Rect dstCombo = {
+            SCREEN_WIDTH / 2 - w / 2, // Centraliza
+            100, // Posição Y do combo
+            w, h
+        };
+
         SDL_RenderCopy(renderer, texCombo, NULL, &dstCombo);
         SDL_FreeSurface(surfCombo);
         SDL_DestroyTexture(texCombo);
@@ -535,37 +583,6 @@ void Game_Render(SDL_Renderer* renderer) {
     SDL_RenderPresent(renderer);
 }
 
-static void SpawnHitAnimation(SDL_Rect checkerPos) {
-    for (int i = 0; i < MAX_HIT_ANIMATIONS; ++i) {
-        if (!s_hitAnimations[i].isActive) {
-            HitAnimation* anim = &s_hitAnimations[i];
-            anim->isActive = 1;
-
-            // Escolhe um frame aleatório (0 a 7)
-            int frameIndex = rand() % HIT_FRAME_COUNT;
-
-            // Calcula posição do frame dentro da grade (4x2)
-            int col = frameIndex % HIT_FRAME_COLS;
-            int row = frameIndex / HIT_FRAME_COLS;
-
-            anim->srcRect.x = col * HIT_FRAME_WIDTH;
-            anim->srcRect.y = row * HIT_FRAME_HEIGHT;
-            anim->srcRect.w = HIT_FRAME_WIDTH;
-            anim->srcRect.h = HIT_FRAME_HEIGHT;
-
-            // Renderizar em 64x64 centralizado no checker
-            anim->pos.w = 64;
-            anim->pos.h = 64;
-            anim->pos.x = checkerPos.x + (checkerPos.w / 2) - (anim->pos.w / 2);
-            anim->pos.y = checkerPos.y - anim->pos.h;
-
-            anim->lifetime = 0.4f;
-            anim->timeAlive = 0.0f;
-            break;
-        }
-    }
-}
-
 static void SpawnConfettiParticle() {
     for (int i = 0; i < MAX_CONFETTI; ++i) {
         if (!s_confetti[i].isActive) {
@@ -593,6 +610,46 @@ static void SpawnConfettiParticle() {
             p->color.a = 255;
             
             break; // Sai do loop após criar uma partícula
+        }
+    }
+}
+
+static void SpawnFeedbackText(const char* text, SDL_Color color, SDL_Rect checkerRect) {
+    for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
+        if (!s_feedbackTexts[i].isActive) {
+            FeedbackText* ft = &s_feedbackTexts[i];
+
+            // Define o conteúdo do texto
+            ft->isActive = true;
+            strncpy(ft->text, text, 15);
+            ft->color = color;
+            ft->lifetime = 0.6f;
+
+            // Lógica de Posicionamento e Anti-Sobreposição
+            // Posição inicial: centralizado acima do checker
+            float startY = checkerRect.y - 20.0f;
+            
+            bool positionFound = false;
+            while (!positionFound) {
+                positionFound = true;
+                // Verifica se a posição Y inicial já está ocupada
+                for (int j = 0; j < MAX_FEEDBACK_TEXTS; ++j) {
+                    if (i == j || !s_feedbackTexts[j].isActive) continue;
+
+                    // Se outro texto estiver muito perto verticalmente
+                    if (fabsf(s_feedbackTexts[j].pos.y - startY) < 25.0f) {
+                        startY -= 25.0f; // Empurra o novo texto para cima
+                        positionFound = false; // Tenta a nova posição
+                        break;
+                    }
+                }
+            }
+
+            // Define a posição final, já corrigida
+            ft->pos.x = checkerRect.x + (checkerRect.w / 2.0f);
+            ft->pos.y = startY;
+            
+            break;
         }
     }
 }

@@ -35,6 +35,8 @@
 #define KEY_LABEL_Y (RHYTHM_TRACK_POS_Y + RHYTHM_TRACK_HEIGHT + 10) // Abaixo da pista
 
 // Margem de acerto (em pixels)
-#define HIT_WINDOW 30
+#define HIT_WINDOW_OK 45 // Não vamos usar ativamente, mas é bom ter
+#define HIT_WINDOW_BOM 25 // Janela para acerto "Bom"
+#define HIT_WINDOW_OTIMO 12 // Janela mais apertada para "Ótimo"
 
 #endif // DEFS_H
