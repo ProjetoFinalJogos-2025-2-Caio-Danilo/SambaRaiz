@@ -63,6 +63,7 @@ static ConfettiParticle s_confetti[MAX_CONFETTI];
 
 static FeedbackText s_feedbackTexts[MAX_FEEDBACK_TEXTS];
 
+static Mix_Chunk* s_failSound = NULL; // NOVO: Som de game over
 
 
 // Implementação das Funções 
@@ -93,7 +94,14 @@ int Game_Init(SDL_Renderer* renderer) {
         return 0;
     }
 
-    // --- Carrega a sprite sheet ---
+    // Carrega o som de falha 
+    s_failSound = Mix_LoadWAV("assets/music/failBoo.mp3");
+    if (!s_failSound) {
+        printf("Erro ao carregar o som de falha: %s\n", Mix_GetError());
+        // Não vamos retornar 0 aqui, o jogo pode continuar sem o som de falha
+    }
+
+    // Carrega a sprite sheet 
     s_hitSpritesheet = IMG_LoadTexture(renderer, "assets/image/hitNotesSpriteSheet.png");
     if (!s_hitSpritesheet) {
         printf("Erro ao carregar a sprite sheet de acerto: %s\n", IMG_GetError());
@@ -120,7 +128,7 @@ int Game_Init(SDL_Renderer* renderer) {
     s_checkers[0] = (Checker){SDLK_z, {CHECKER_Z_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
     s_checkers[1] = (Checker){SDLK_x, {CHECKER_X_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
     s_checkers[2] = (Checker){SDLK_c, {CHECKER_C_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
-
+    
     // Inicia a música
     Mix_PlayMusic(s_faseAtual->musica, 0);
 
@@ -215,19 +223,19 @@ void Game_HandleEvent(SDL_Event* e) {
                     // Definir a precisão
                     if (dist <= HIT_WINDOW_OTIMO) {
                         // Recompensas de "Ótimo"
-                        points = 200;
+                        points = 20;
                         s_health += 2.0f;
                         if (!s_isSpecialActive) { s_specialMeter += 0.75f + (s_combo * 0.1f); }
                         SpawnFeedbackText("Otimo!", (SDL_Color){255, 223, 0, 255}, checker->rect);
                     } else if (dist <= HIT_WINDOW_BOM) {
                         // Recompensas de "Bom"
-                        points = 100;
+                        points = 10;
                         s_health += 1.0f;
                         if (!s_isSpecialActive) { s_specialMeter += 0.5f + (s_combo * 0.1f); }
                         SpawnFeedbackText("Bom", (SDL_Color){50, 205, 50, 255}, checker->rect);
                     } else {
                         //Recompensas de "Ok"
-                        points = 25;
+                        points = 2;
                         s_health += 0.5f; // Recupera menos vida
                         if (!s_isSpecialActive) { s_specialMeter += 0.25f; } // Quase não ganha especial
                         SpawnFeedbackText("Ok", (SDL_Color){192, 192, 192, 255}, checker->rect); // Cinza claro
@@ -359,10 +367,16 @@ void Game_Update(float deltaTime) {
         }
     }
 
-    // Checagem de Game Over ---
+    // Checagem de Game Over
     if (s_health <= 0 && !s_isGameOver) {
         s_isGameOver = true;
-        Mix_HaltMusic();
+        Mix_HaltMusic(); // Para a música Principal
+
+        // Toca o som de falha
+        if (s_failSound) {
+            Mix_PlayChannel(-1, s_failSound, 0); // Toca o som uma vez
+        }
+
         printf("GAME OVER!\n");
     }
 }
@@ -665,6 +679,11 @@ void Game_Shutdown() {
     }
 
     SDL_DestroyTexture(s_hitSpritesheet);
+
+    // Libera o som de falha
+    if (s_failSound) {
+        Mix_FreeChunk(s_failSound);
+    }
 
     if (s_font) {
         TTF_CloseFont(s_font);
