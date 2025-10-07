@@ -1,27 +1,58 @@
-# Compilador e flags
+# Nome do Compilador
 CC = gcc
-CFLAGS = -Wall -IC:/msys64/mingw64/include
-LDFLAGS = -LC:/msys64/mingw64/lib
-LIBS = -lmingw32 -lSDL2main -lSDL2 -lSDL2_gfx -lSDL2_image -lSDL2_mixer -lSDL2_ttf
 
-# Fontes e objetos
-SRC = src/game.c src/main.c src/note.c src/stage.c src/auxFuncs/auxWaitEvent.c src/Songs/meuLugarFase.c
+# Pacotes SDL2 a serem encontrados pelo pkg-config
+SDL_PACKAGES = sdl2 SDL2_gfx SDL2_image SDL2_mixer SDL2_ttf
+
+# Flags de Compilação (-I) e Linker (-L, -l) obtidas automaticamente
+# -Wall habilita todos os avisos importantes
+CFLAGS = -Wall $(shell pkg-config --cflags $(SDL_PACKAGES))
+LDFLAGS = $(shell pkg-config --libs $(SDL_PACKAGES)) -lSDL2main
+
+# Diretório onde o executável final será colocado
+TARGET_DIR = output
+
+# Lista de todos os arquivos fonte .c
+SRC = src/game.c \
+      src/main.c \
+      src/note.c \
+      src/stage.c \
+      src/auxFuncs/auxWaitEvent.c \
+      src/Songs/meuLugarFase.c
+
 OBJ = $(SRC:.c=.o)
 
-# Executável
-BIN = output/main.exe
+# Padrão para sistemas baseados em Unix (Linux, macOS)
+EXECUTABLE = $(TARGET_DIR)/main
+RM = rm -f
 
-# Regra padrão
-all: $(BIN)
+# Detecta se o sistema é Windows e sobrepõe as variáveis
+ifeq ($(OS),Windows_NT)
+    EXECUTABLE = $(TARGET_DIR)/main.exe
+endif
 
-# Como criar o executável
-$(BIN): $(OBJ)
-	$(CC) $(OBJ) -o $@ $(LDFLAGS) $(LIBS)
 
-# Como criar os objetos
+# --- Regras do Make ---
+
+all: $(EXECUTABLE)
+
+$(EXECUTABLE): $(OBJ) | $(TARGET_DIR)
+	@echo "Ligando os objetos para criar o executável..."
+	$(CC) $(OBJ) -o $@ $(LDFLAGS)
+	@echo "Executável '$(EXECUTABLE)' criado com sucesso!"
+
 %.o: %.c
+	@echo "Compilando $<..."
 	$(CC) -c $< -o $@ $(CFLAGS)
 
-# Limpeza
+$(TARGET_DIR):
+	@echo "Criando diretório de saída: $(TARGET_DIR)"
+	mkdir -p $(TARGET_DIR)
+
 clean:
-	rm -f src/*.o src/auxFuncs/*.o src/Songs/*.o output/main.exe
+	@echo "Limpando arquivos compilados..."
+	$(RM) $(OBJ)
+	$(RM) $(EXECUTABLE)
+	@echo "Limpeza concluída."
+
+.PHONY: all clean
