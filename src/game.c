@@ -9,7 +9,7 @@
 #include <SDL2/SDL_ttf.h>
 
 typedef struct {
-    SDL_KeyCode tecla;
+    SDL_Keycode tecla;
     SDL_Rect rect;
     float isPressedTimer;
 } Checker;
@@ -155,7 +155,7 @@ void Game_HandleEvent(SDL_Event* e) {
             }
         
             case SDL_KEYDOWN: {
-                SDL_KeyCode teclaPressionada = e->key.keysym.sym;
+                SDL_Keycode teclaPressionada = e->key.keysym.sym;
 
                 switch (teclaPressionada) {
                     case SDLK_ESCAPE: s_gameIsRunning = 0; break;
@@ -175,7 +175,7 @@ void Game_HandleEvent(SDL_Event* e) {
         }
         
         case SDL_KEYDOWN: {
-            SDL_KeyCode teclaPressionada = e->key.keysym.sym;
+            SDL_Keycode teclaPressionada = e->key.keysym.sym;
 
             // Identifica qual checker foi ativado
             int checkerIndex = -1;

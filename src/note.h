@@ -11,14 +11,14 @@ typedef enum {
 } EstadoNota;
 
 typedef struct {
-    SDL_KeyCode tecla;
+    SDL_Keycode tecla;
     Uint32 spawnTime;
     EstadoNota estado;
     SDL_FRect pos;
 } Nota;
 
 // --- Protótipos de Funções ---
-Nota Note_Create(SDL_KeyCode tecla, Uint32 spawnTime);
+Nota Note_Create(SDL_Keycode tecla, Uint32 spawnTime);
 void Note_Update(Nota* nota, float deltaTime);
 void Note_Render(const Nota* nota, SDL_Renderer* renderer);
 

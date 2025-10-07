@@ -3,7 +3,7 @@
 #include <SDL2/SDL2_gfxPrimitives.h>
 
 // Cria e inicializa uma nota com valores padrão.
-Nota Note_Create(SDL_KeyCode tecla, Uint32 spawnTime) {
+Nota Note_Create(SDL_Keycode tecla, Uint32 spawnTime) {
     Nota n;
     n.tecla = tecla;
     n.spawnTime = spawnTime;
