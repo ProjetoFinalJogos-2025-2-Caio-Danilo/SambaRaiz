@@ -65,6 +65,8 @@ static FeedbackText s_feedbackTexts[MAX_FEEDBACK_TEXTS];
 
 static Mix_Chunk* s_failSound = NULL; // NOVO: Som de game over
 
+static Uint32 s_musicStartTime = 0; // VARIÁVEL PARA CONTROLE DE TEMPO
+
 
 // Implementação das Funções 
 
@@ -131,6 +133,7 @@ int Game_Init(SDL_Renderer* renderer) {
     
     // Inicia a música
     Mix_PlayMusic(s_faseAtual->musica, 0);
+    s_musicStartTime = SDL_GetTicks();
 
     // Abre a fonte para score/combo
     s_font = TTF_OpenFont("assets/font/pixelFont.ttf", 48);
@@ -147,46 +150,60 @@ void Game_HandleEvent(SDL_Event* e) {
         
         //Conseguir fechar o jogo quando der GameOver, por enquanto deixarei assim.
         switch (e->type){
-            case SDL_QUIT:
+            case SDL_QUIT: {
                 s_gameIsRunning = 0;
+            }
         
-            case SDL_KEYDOWN:
+            case SDL_KEYDOWN: {
                 SDL_KeyCode teclaPressionada = e->key.keysym.sym;
 
                 switch (teclaPressionada) {
-                    case SDLK_ESCAPE: s_gameIsRunning = 0;
-                    default:
+                    case SDLK_ESCAPE: s_gameIsRunning = 0; break;
+                    default: {
                         // Se não for uma tecla do jogo, encerra o evento.
                         return; 
+                    }
                 }
+            }
         }
         
     }
     switch (e->type){
 
-        case SDL_QUIT:
+        case SDL_QUIT: {
             s_gameIsRunning = 0;
+        }
         
-        case SDL_KEYDOWN:
+        case SDL_KEYDOWN: {
             SDL_KeyCode teclaPressionada = e->key.keysym.sym;
 
             // Identifica qual checker foi ativado
             int checkerIndex = -1;
             switch (teclaPressionada) {
-                case SDLK_ESCAPE: s_gameIsRunning = 0; return;
-                case SDLK_z: checkerIndex = 0; break;
-                case SDLK_x: checkerIndex = 1; break;
-                case SDLK_c: checkerIndex = 2; break;
-                case SDLK_SPACE:
+                case SDLK_ESCAPE:{
+                     s_gameIsRunning = 0; return;
+                }
+                case SDLK_z: { 
+                    checkerIndex = 0; break;
+                }
+                case SDLK_x: {
+                    checkerIndex = 1; break;
+                }
+                case SDLK_c:{
+                    checkerIndex = 2; break;
+                }
+                case SDLK_SPACE: {
                     if (s_specialMeter >= 100.0f && !s_isSpecialActive) {
                         s_isSpecialActive = true;
                         s_specialTimer = SPECIAL_DURATION;
                         printf("ESPECIAL ATIVADO!\n");
                     }
                     return;
-                default:
+                }
+                default: {
                     // Se não for uma tecla do jogo, encerra o evento.
                     return; 
+                }
             }
 
             // Com o checker identificado, executa a lógica principal
@@ -264,6 +281,7 @@ void Game_HandleEvent(SDL_Event* e) {
                 printf("ERROU! Combo resetado.\n");
             }
             break;
+        }
     }
 
 }
@@ -272,7 +290,7 @@ void Game_Update(float deltaTime) {
     if (s_isGameOver) return;
     if (!s_gameIsRunning || Mix_PlayingMusic() == 0) return;
 
-    Uint32 tempoAtual = (Uint32)(Mix_GetMusicPosition(s_faseAtual->musica) * 1000.0);
+    Uint32 tempoAtual = SDL_GetTicks() - s_musicStartTime;
 
     // Lógica do Especial e dos Confetes 
     if (s_isSpecialActive) {
