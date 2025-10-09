@@ -1,44 +1,79 @@
+
 #include "note.h"
 #include "defs.h"
 #include <SDL2/SDL2_gfxPrimitives.h>
+#include <math.h> // Para fmaxf
 
-// Cria e inicializa uma nota com valores padrão.
+// Cria nota simples
 Nota Note_Create(SDL_Keycode tecla, Uint32 spawnTime) {
-    Nota n;
+    Nota n = {0}; // Zera a struct
     n.tecla = tecla;
     n.spawnTime = spawnTime;
+    n.duration = 0;
     n.estado = NOTA_INATIVA;
-    n.pos.w = NOTE_WIDTH;
-    n.pos.h = NOTE_HEIGHT;
-    n.pos.y = NOTE_Y;
-    n.pos.x = NOTE_START_X; // Todas começam fora da tela
+    n.pos = (SDL_FRect){NOTE_START_X, NOTE_Y, NOTE_WIDTH, NOTE_HEIGHT};
     return n;
 }
 
-// Atualiza a posição de uma nota se ela estiver ativa.
+// Cria nota longa
+Nota Note_CreateLong(SDL_Keycode tecla, Uint32 spawnTime, Uint32 duration) {
+    Nota n = Note_Create(tecla, spawnTime);
+    n.duration = duration;
+    return n;
+}
+
+// Atualiza a posição
 void Note_Update(Nota* nota, float deltaTime) {
-    if (nota->estado == NOTA_ATIVA) {
+    if (nota->estado == NOTA_ATIVA || nota->estado == NOTA_SEGURANDO || nota->estado == NOTA_QUEBRADA) {
         nota->pos.x -= NOTE_SPEED * deltaTime;
     }
 }
 
-// Renderiza uma nota na tela se ela estiver ativa.
-void Note_Render(const Nota* nota, SDL_Renderer* renderer) {
-    if (nota->estado == NOTA_ATIVA) {
-        // Define a cor da nota baseada na tecla
-        Uint8 r = 255, g = 255, b = 255;
-        if (nota->tecla == SDLK_z) { g = 50; b = 50; }   // Z = Vermelho
-        if (nota->tecla == SDLK_x) { r = 50; b = 50; }   // X = Verde
-        if (nota->tecla == SDLK_c) { r = 50; g = 50; }   // C = Azul
+// Lógica de renderização completa
+void Note_Render(const Nota* nota, SDL_Renderer* renderer, float checker_pos_x) {
+    if (nota->estado == NOTA_INATIVA || nota->estado == NOTA_ATINGIDA) return;
 
-        // Calcular o centro e o raio para o círculo
-        Sint16 centerX = (Sint16)(nota->pos.x + nota->pos.w / 2);
-        Sint16 centerY = (Sint16)(nota->pos.y + nota->pos.h / 2);
-        Sint16 radius = (Sint16)(nota->pos.w / 2);
+    Uint8 r = 255, g = 255, b = 255, a = 255;
+    if (nota->tecla == SDLK_z) { g = 50; b = 50; }
+    if (nota->tecla == SDLK_x) { r = 50; b = 50; }
+    if (nota->tecla == SDLK_c) { r = 50; g = 50; }
 
-        // Desenha a nota como um círculo preenchido
-        filledCircleRGBA(renderer, centerX, centerY, radius, r, g, b, 255);
-        
-        aacircleRGBA(renderer, centerX, centerY, radius, 255, 255, 255, 255); // Contorno branco
+    if (nota->estado == NOTA_QUEBRADA || nota->estado == NOTA_PERDIDA) {
+        r = 100; g = 100; b = 100; a = 150;
+    }
+
+    Sint16 head_centerX = (Sint16)(nota->pos.x + nota->pos.w / 2);
+    Sint16 centerY = (Sint16)(nota->pos.y + nota->pos.h / 2);
+    Sint16 radius = (Sint16)(nota->pos.w / 2);
+    float checker_centerX = checker_pos_x + (NOTE_WIDTH / 2);
+
+    if (nota->duration > 0) { // Lógica para NOTA LONGA
+        float body_length = NOTE_SPEED * (nota->duration / 1000.0f);
+        float tail_centerX = head_centerX + body_length;
+
+        // Desenha o CORPO 
+        float body_visible_start_x = head_centerX;
+        if (nota->estado == NOTA_SEGURANDO) {
+            body_visible_start_x = fmaxf(head_centerX, checker_centerX);
+        }
+
+        if (tail_centerX > body_visible_start_x) {
+            boxRGBA(renderer,
+                (Sint16)body_visible_start_x, (Sint16)(centerY - radius / 2.5f),
+                (Sint16)tail_centerX, (Sint16)(centerY + radius / 2.5f),
+                r, g, b, a);
+        }
+
+        // Desenha a CAUDA (círculo final) 
+        if (tail_centerX > checker_pos_x) {
+             filledCircleRGBA(renderer, (Sint16)tail_centerX, centerY, radius, r, g, b, a);
+             aacircleRGBA(renderer, (Sint16)tail_centerX, centerY, radius, 255, 255, 255, a);
+        }
+    }
+    
+    // Desenha a CABEÇA (círculo inicial) 
+    if (!(nota->estado == NOTA_SEGURANDO && head_centerX < checker_centerX)) {
+        filledCircleRGBA(renderer, head_centerX, centerY, radius, r, g, b, a);
+        aacircleRGBA(renderer, head_centerX, centerY, radius, 255, 255, 255, a);
     }
 }

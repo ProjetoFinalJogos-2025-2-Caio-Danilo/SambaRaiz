@@ -208,6 +208,23 @@ void Game_HandleEvent(SDL_Event* e) {
         case SDL_KEYDOWN: {
             SDL_Keycode teclaPressionada = e->key.keysym.sym;
 
+            //Necessário para poder deixar a tecla pressionada, e ajustado para detectar se for erro ou não.
+             if (e->key.repeat != 0) {
+                bool isCurrentlyHolding = false;
+                // Verifica se o jogador já está no estado NOTA_SEGURANDO para esta tecla
+                for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+                    Nota* nota = &s_gameState.faseAtual->beatmap[i];
+                    if (nota->estado == NOTA_SEGURANDO && nota->tecla == teclaPressionada) {
+                        isCurrentlyHolding = true;
+                        break;
+                    }
+                }
+                // Se estiver segurando corretamente uma nota longa, ignora o evento de repetição.
+                if (isCurrentlyHolding) {
+                    break; 
+                }
+            }
+
             // Identifica qual checker foi ativado
             int checkerIndex = -1;
             switch (teclaPressionada) {
@@ -258,7 +275,12 @@ void Game_HandleEvent(SDL_Event* e) {
                 float dist = fabsf(nota->pos.x - checker->rect.x);
 
                 if (dist <= HIT_WINDOW_OK) { // Checa a janela mais larga primeiro
-                    nota->estado = NOTA_ATINGIDA;
+                    //Diferenciar nota normal da nota longa
+                    if (nota->duration > 0) {
+                        nota->estado = NOTA_SEGURANDO;
+                    } else {
+                        nota->estado = NOTA_ATINGIDA;
+                    }
                     acertouNota = true;
                     s_gameState.combo++;
 
@@ -296,9 +318,16 @@ void Game_HandleEvent(SDL_Event* e) {
                     if (s_gameState.specialMeter > 100.0f) s_gameState.specialMeter = 100.0f;
                     
                     // Aplica os multiplicadores de combo e especial
-                    points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
-                    if (s_gameState.isSpecialActive) points *= 2;
-                    s_gameState.score += points;
+                    if (nota->duration > 0) {
+                        // NOTA LONGA: Apenas muda o estado. NENHUM PONTO É ADICIONADO AQUI.
+                        nota->estado = NOTA_SEGURANDO;
+                    } else {
+                        // NOTA NORMAL: Pontuação é calculada e adicionada agora.
+                        nota->estado = NOTA_ATINGIDA;
+                        points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
+                        if (s_gameState.isSpecialActive) points *= 2;
+                        s_gameState.score += points;
+                    }
                     
                     break;
                 }
@@ -314,7 +343,63 @@ void Game_HandleEvent(SDL_Event* e) {
                 printf("ERROU! Combo resetado.\n");
             }
             break;
-        } 
+        }
+
+        //Case para quando soltar a tecla pressionada
+        case SDL_KEYUP: {
+            if (e->key.repeat != 0) break;
+            SDL_Keycode teclaSolta = e->key.keysym.sym;
+
+            int checkerIndex = -1;
+            if (teclaSolta == SDLK_z) checkerIndex = 0;
+            else if (teclaSolta == SDLK_x) checkerIndex = 1;
+            else if (teclaSolta == SDLK_c) checkerIndex = 2;
+            else break;
+            
+            Checker* checker = &s_gameState.checkers[checkerIndex];
+
+            // Procura uma nota que estava sendo segurada com esta tecla
+            for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+                Nota* nota = &s_gameState.faseAtual->beatmap[i];
+                if (nota->estado == NOTA_SEGURANDO && nota->tecla == teclaSolta) {
+                    
+                    float bodyLength = NOTE_SPEED * (nota->duration / 1000.0f);
+                    float tail_pos_x = nota->pos.x + bodyLength;
+                    float dist = fabsf(tail_pos_x - checker->rect.x);
+
+                    //Precisão ao soltar a tecla em notas longas
+                    if (dist <= HIT_WINDOW_OK) {
+                        nota->estado = NOTA_ATINGIDA;
+                        s_gameState.combo++; // Bônus de combo por finalizar
+
+                        int points = 0;
+                        int feedbackType = 0;
+                        
+                        if (dist <= HIT_WINDOW_OTIMO) {
+                            points = 40; feedbackType = 0; // Ótimo
+                        } else if (dist <= HIT_WINDOW_BOM) {
+                            points = 20; feedbackType = 1; // Bom
+                        } else {
+                            points = 5; feedbackType = 2; // Ok
+                        }
+                        
+                        // Pontuação completa da nota longa é calculada e aplicada aqui (Se não soltou corretamente, não ganha ponto algum)
+                        points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
+                        if (s_gameState.isSpecialActive) points *= 2;
+                        s_gameState.score += points;
+
+                        SpawnFeedbackText(feedbackType, checker->rect);
+
+                    } else { // Soltou fora da janela de acerto
+                        nota->estado = NOTA_QUEBRADA;
+                        nota->despawnTimer = 0.5f;
+                        s_gameState.combo = 0;
+                        s_gameState.health -= 2.0f;
+                    }
+                    break;
+                }
+            }
+        } break;
     } 
 }
 
@@ -370,28 +455,48 @@ void Game_Update(float deltaTime) {
     // Atualizar notas
     for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
         Nota* nota = &s_gameState.faseAtual->beatmap[i];
+        
+        // Atualiza a posição apenas se a nota estiver em movimento
         Note_Update(nota, deltaTime);
 
-        // Checar perda
-        if (nota->estado == NOTA_ATIVA) {
-            float checker_pos_x = 0;
-
-            for(int j=0; j < 3; ++j) {
-                if (s_gameState.checkers[j].tecla == nota->tecla) {
-                    checker_pos_x = s_gameState.checkers[j].rect.x;
-                    break;
-                }
+        float checker_pos_x = 0;
+        for(int j=0; j < 3; ++j) {
+            if (s_gameState.checkers[j].tecla == nota->tecla) {
+                checker_pos_x = s_gameState.checkers[j].rect.x;
+                break;
             }
-            
+        }
+        
+        // Lógica de falha e limpeza
+        
+        // Checa se uma nota ativa foi perdida (passou do checker)
+        if (nota->estado == NOTA_ATIVA) {
             if (nota->pos.x < (checker_pos_x - HIT_WINDOW_OK)) {
-                nota->estado = NOTA_PERDIDA;
+                nota->estado = NOTA_INATIVA; 
                 s_gameState.combo = 0;
-
-                // Perde vida ao deixar nota passar
-                s_gameState.health -= 5.0f; 
+                s_gameState.health -= 5.0f;
                 if (s_gameState.health < 0.0f) s_gameState.health = 0.0f;
+                printf("ERROU (Nota perdida)! Combo resetado.\n");
+            }
+        } 
+        // Checa se o jogador segurou uma nota longa por tempo demais
+        else if (nota->estado == NOTA_SEGURANDO) {
+            float bodyLength = NOTE_SPEED * (nota->duration / 1000.0f);
+            float tail_pos_x = nota->pos.x + bodyLength;
 
-                printf("ERROU! Combo resetado.\n");
+            if (tail_pos_x < (checker_pos_x - HIT_WINDOW_OK)) {
+                nota->estado = NOTA_INATIVA;
+                s_gameState.combo = 0;
+                s_gameState.health -= 2.0f;
+                printf("ERROU (Não soltou a tempo)! Combo resetado.\n");
+            }
+        }
+
+        // Processa o timer de desaparecimento 
+        if (nota->despawnTimer > 0) {
+            nota->despawnTimer -= deltaTime;
+            if (nota->despawnTimer <= 0) {
+                nota->estado = NOTA_INATIVA;
             }
         }
     }
@@ -484,7 +589,14 @@ void Game_Render(SDL_Renderer* renderer) {
 
     // Render notas
     for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
-        Note_Render(&s_gameState.faseAtual->beatmap[i], renderer);
+        Nota* nota = &s_gameState.faseAtual->beatmap[i];
+
+        float checker_pos_x = 0;
+        if (nota->tecla == SDLK_z) checker_pos_x = CHECKER_Z_X;
+        else if (nota->tecla == SDLK_x) checker_pos_x = CHECKER_X_X;
+        else if (nota->tecla == SDLK_c) checker_pos_x = CHECKER_C_X;
+        
+        Note_Render(nota, renderer, checker_pos_x);
     }
     
     // Renderiza os confetes (antes da UI)
