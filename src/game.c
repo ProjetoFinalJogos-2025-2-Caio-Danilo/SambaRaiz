@@ -126,7 +126,7 @@ int Game_Init(SDL_Renderer* renderer) {
     }
     
     // Carrega o som de Game Over
-    s_gameState.failSound = Mix_LoadWAV("assets/music/failBoo.mp3");
+    s_gameState.failSound = Mix_LoadWAV("assets/sounds/failBoo.mp3");
     if (!s_gameState.failSound) {
         printf("Aviso: Nao foi possivel carregar o som de gameOver: %s\n", Mix_GetError());
     }
@@ -149,7 +149,7 @@ int Game_Init(SDL_Renderer* renderer) {
     }
 
     // Carrega a fase
-    s_gameState.faseAtual = Carregar_Fase_MeuLugar(renderer);
+    s_gameState.faseAtual = Fase_CarregarDeArquivo(renderer, "assets/beatMaps/meu_lugar.samba");
     if (!s_gameState.faseAtual) {
         return 0; // Falha ao carregar a fase
     }

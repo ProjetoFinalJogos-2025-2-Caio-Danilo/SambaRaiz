@@ -6,7 +6,7 @@
 #include "note.h"
 #include "defs.h"
 
-#define MAX_NOTAS_POR_FASE 2048
+#define MAX_NOTAS_POR_FASE 4096
 
 typedef struct {
     Mix_Music* musica;
@@ -18,9 +18,7 @@ typedef struct {
 } Fase;
 
 // Carrega os recursos da fase e define o beatmap
-Fase* Fase_Carregar(SDL_Renderer* renderer);
-
-Fase* Carregar_Fase_MeuLugar(SDL_Renderer* render);
+Fase* Fase_CarregarDeArquivo(SDL_Renderer* renderer, const char* caminhoDoArquivo);
 
 // Libera a memória usada pela fase
 void Fase_Liberar(Fase* fase);
