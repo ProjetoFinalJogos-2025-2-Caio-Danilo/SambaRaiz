@@ -41,7 +41,6 @@ typedef struct {
 typedef struct {
     Fase* faseAtual;
     Checker checkers[3];
-    int gameIsRunning;
     int score;
     int combo;
     float comboPulseTimer;
@@ -51,7 +50,10 @@ typedef struct {
     SDL_Texture* checkerKeyTex[3];      // Texturas para as teclas Z, X, C
 
     float health;             // Vida do jogador (de 0.0 a 100.0)
+
+    bool gameIsRunning;       // Flag para controlar o estado de Rodando
     bool isGameOver;          // Flag para controlar o fim de jogo
+    bool isPaused;            // Flag para controlar o estado de pause
 
     float specialMeter;       // Medidor de 0.0 a 100.0 para o Especial
     bool isSpecialActive;     // Check do Especial se está ativo
@@ -62,6 +64,7 @@ typedef struct {
 
     Mix_Chunk* failSound;       // Som de game over
     Uint32 musicStartTime;      // Variavel para controle de tempo, usada em "tempoAtual". Substitiu a função: Mix_GetMusicPosition
+    Uint32 pauseStartTime;      // Guarda o momento em que o jogo foi pausado
 
     // Cache para texturas de UI
     CachedTexture scoreTexture;
@@ -92,7 +95,8 @@ int Game_Init(SDL_Renderer* renderer) {
     // Garante Vida cheia ao iniciar o jogo.
     s_gameState.health = 100.0f;
     s_gameState.isGameOver = false;
-    s_gameState.gameIsRunning = 1;
+    s_gameState.isPaused = false;
+    s_gameState.gameIsRunning = true;
 
     // Força a primeira atualização das texturas de placar/combo
     s_gameState.cachedScore = -1; 
@@ -195,14 +199,28 @@ void Game_HandleEvent(SDL_Event* e) {
     if (s_gameState.isGameOver){
         // Conseguir fechar o jogo quando der GameOver, por enquanto deixarei assim.
         if (e->type == SDL_QUIT || (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_ESCAPE)) {
-            s_gameState.gameIsRunning = 0;
+            s_gameState.gameIsRunning = false;
         }
         return;
     }
-    
+
+    if (s_gameState.isPaused) {
+        // Permite sair do jogo mesmo estando pausado
+        if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_ESCAPE) {
+            s_gameState.gameIsRunning = 0;
+        }
+        else if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_p) {
+            Uint32 pausedDuration = SDL_GetTicks() - s_gameState.pauseStartTime;
+            s_gameState.musicStartTime += pausedDuration;
+            Mix_ResumeMusic();
+            s_gameState.isPaused = !s_gameState.isPaused;
+        }
+        return;
+    }
+
     switch (e->type) {
         case SDL_QUIT: {
-            s_gameState.gameIsRunning = 0;
+            s_gameState.gameIsRunning = false;
             break;
         }
         case SDL_KEYDOWN: {
@@ -228,8 +246,13 @@ void Game_HandleEvent(SDL_Event* e) {
             // Identifica qual checker foi ativado
             int checkerIndex = -1;
             switch (teclaPressionada) {
+                case SDLK_p:{
+                    s_gameState.pauseStartTime = SDL_GetTicks();
+                    s_gameState.isPaused = !s_gameState.isPaused;
+                    Mix_PauseMusic(); // Pausa a música
+                }return;
                 case SDLK_ESCAPE:{
-                    s_gameState.gameIsRunning = 0; return;
+                    s_gameState.gameIsRunning = false; return;
                 } 
                 case SDLK_z: {
                     checkerIndex = 0; break;
@@ -405,6 +428,7 @@ void Game_HandleEvent(SDL_Event* e) {
 
 
 void Game_Update(float deltaTime) {
+    if (s_gameState.isPaused) return;
     if (s_gameState.isGameOver) return;
     if (!s_gameState.gameIsRunning || Mix_PlayingMusic() == 0) return;
 
@@ -689,6 +713,28 @@ void Game_Render(SDL_Renderer* renderer) {
         SDL_RenderCopy(renderer, texGO, NULL, &dstGO);
         SDL_FreeSurface(surfGO);
         SDL_DestroyTexture(texGO);
+    }
+
+    // Desenha a tela de PAUSE se o jogo estiver pausado ---
+    if (s_gameState.isPaused && s_gameState.font) {
+        // 1. Desenha uma camada escura semi-transparente sobre o jogo
+        boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 150);
+
+        // 2. Desenha o texto "PAUSE" no centro
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Surface* surfPause = TTF_RenderText_Blended(s_gameState.font, "PAUSE", white);
+        if (surfPause) {
+            SDL_Texture* texPause = SDL_CreateTextureFromSurface(renderer, surfPause);
+            SDL_Rect dstPause = {
+                SCREEN_WIDTH / 2 - surfPause->w / 2,
+                SCREEN_HEIGHT / 2 - surfPause->h / 2,
+                surfPause->w,
+                surfPause->h
+            };
+            SDL_RenderCopy(renderer, texPause, NULL, &dstPause);
+            SDL_FreeSurface(surfPause);
+            SDL_DestroyTexture(texPause);
+        }
     }
 
     SDL_RenderPresent(renderer);
