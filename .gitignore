@@ -7,3 +7,6 @@
 */*.o
 */Songs/*.o
 */auxFuncs/*.o
+
+# Ignora leaderboard
+*.dat

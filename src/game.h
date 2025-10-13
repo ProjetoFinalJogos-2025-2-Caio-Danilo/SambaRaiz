@@ -2,6 +2,7 @@
 #define GAME_H
 
 #include <SDL2/SDL.h>
+#include <stdbool.h> // Adicionado para usar o tipo 'bool'
 
 // Inicializa o estado do jogo, carrega recursos, etc.
 // Retorna 1 em caso de sucesso, 0 em caso de falha.
@@ -19,7 +20,10 @@ void Game_Render(SDL_Renderer* renderer);
 // Libera todos os recursos carregados pelo jogo.
 void Game_Shutdown();
 
-// Retorna 0 se o jogo deve ser encerrado.
-int Game_IsRunning();
+// Retorna true se o loop do jogo principal deve continuar.
+bool Game_IsRunning();
 
-#endif
+// Retorna true se o jogo deve ser reiniciado após o encerramento.
+bool Game_NeedsRestart();
+
+#endif // GAME_H

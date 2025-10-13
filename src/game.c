@@ -9,6 +9,41 @@
 #include <SDL2/SDL2_gfxPrimitives.h>
 #include <SDL2/SDL_ttf.h>
 
+// Constantes
+#define MAX_CONFETTI 200        // Máximo de partículas de confetti na tela
+#define SPECIAL_DURATION 10.0f  // Duração do especial em segundos
+#define MAX_FEEDBACK_TEXTS 5    // Permite que até 5 textos apareçam ao mesmo tempo
+
+#define MAX_LEADERBOARD_ENTRIES 10
+#define MAX_SONGS_IN_LEADERBOARD 50 // Pode guardar recordes de até 50 musicas
+#define SONG_NAME_MAX_LEN 64
+
+typedef enum {
+    STATE_PLAYING,
+    STATE_RESULTS_ANIMATING,  // Tela de resultado, com o placar subindo
+    STATE_RESULTS_NAME_ENTRY, // Tela para inserir o nome (se for recorde)
+    STATE_RESULTS_LEADERBOARD, // Tela final com o ranking
+    STATE_PAUSE,
+    STATE_GAMEOVER
+} GameFlowState;
+
+typedef struct {
+    char name[4]; 
+    int score;
+} HighScore;
+
+// Estrutura que agrupa os recordes de UMA música
+typedef struct {
+    char songName[SONG_NAME_MAX_LEN];
+    HighScore scores[MAX_LEADERBOARD_ENTRIES];
+} SongLeaderboard;
+
+// Estrutura principal que será salva em arquivo
+typedef struct {
+    int songCount;
+    SongLeaderboard songLeaderboards[MAX_SONGS_IN_LEADERBOARD];
+} LeaderboardData;
+
 // Estruturas para cache de texturas e organização
 typedef struct {
     char text[64];
@@ -39,6 +74,9 @@ typedef struct {
 
 // Agrupamento vas variáveis de estado do Jogo em uma única struct
 typedef struct {
+
+    GameFlowState gameFlowState; // Controla o estado atual do fluxo
+
     Fase* faseAtual;
     Checker checkers[3];
     int score;
@@ -52,8 +90,6 @@ typedef struct {
     float health;             // Vida do jogador (de 0.0 a 100.0)
 
     bool gameIsRunning;       // Flag para controlar o estado de Rodando
-    bool isGameOver;          // Flag para controlar o fim de jogo
-    bool isPaused;            // Flag para controlar o estado de pause
 
     float specialMeter;       // Medidor de 0.0 a 100.0 para o Especial
     bool isSpecialActive;     // Check do Especial se está ativo
@@ -73,17 +109,31 @@ typedef struct {
     int cachedScore;
     int cachedCombo;
 
+    // Variáveis para a tela de resultados
+    int finalScore;
+    int displayedScore;
+    int notesHit;
+    float accuracy;
+    int newHighscoreRank; // Posição (0-9) no ranking, ou -1 se não entrou
+    SongLeaderboard* currentSongLeaderboard; // Ponteiro para o leaderboard da música ATUAL
+    char currentName[4];
+    int nameEntryCharIndex;
+    int selectedButtonIndex;
+    bool needsRestart;
+
+    bool debug;
+
 } GameState;
 
 // Instância do estado do jogo
 static GameState s_gameState;
-
-// Constantes
-#define MAX_CONFETTI 200        // Máximo de partículas de confetti na tela
-#define SPECIAL_DURATION 10.0f  // Duração do especial em segundos
-#define MAX_FEEDBACK_TEXTS 5    // Permite que até 5 textos apareçam ao mesmo tempo
+static LeaderboardData s_leaderboardData;
 
 // Protótipos de Funções Estáticas
+static void SaveLeaderboard();
+static void LoadLeaderboard();
+static void FindOrCreateCurrentSongLeaderboard(const char* songName);
+static void RenderText(SDL_Renderer* renderer, const char* text, int x, int y, SDL_Color color, bool center);
 static void SpawnConfettiParticle();
 static void SpawnFeedbackText(int type, SDL_Rect checkerRect);
 static void UpdateTextureCache(SDL_Renderer* renderer);
@@ -94,9 +144,10 @@ int Game_Init(SDL_Renderer* renderer) {
 
     // Garante Vida cheia ao iniciar o jogo.
     s_gameState.health = 100.0f;
-    s_gameState.isGameOver = false;
-    s_gameState.isPaused = false;
     s_gameState.gameIsRunning = true;
+    s_gameState.needsRestart = false;
+    s_gameState.gameFlowState = STATE_PLAYING; // Inicia no estado de "jogando"
+    s_gameState.notesHit = 0;
 
     // Força a primeira atualização das texturas de placar/combo
     s_gameState.cachedScore = -1; 
@@ -126,7 +177,7 @@ int Game_Init(SDL_Renderer* renderer) {
     }
     
     // Carrega o som de Game Over
-    s_gameState.failSound = Mix_LoadWAV("assets/sounds/failBoo.mp3");
+    s_gameState.failSound = Mix_LoadWAV("assets/sound/failBoo.mp3");
     if (!s_gameState.failSound) {
         printf("Aviso: Nao foi possivel carregar o som de gameOver: %s\n", Mix_GetError());
     }
@@ -153,6 +204,10 @@ int Game_Init(SDL_Renderer* renderer) {
     if (!s_gameState.faseAtual) {
         return 0; // Falha ao carregar a fase
     }
+
+    // Encontra o leaderboard específico para esta música
+    LoadLeaderboard();
+    FindOrCreateCurrentSongLeaderboard("MeuLugar"); // Use um nome para identificar a música
 
     // Inicializa checkers
     s_gameState.checkers[0] = (Checker){SDLK_z, {CHECKER_Z_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
@@ -191,376 +246,428 @@ int Game_Init(SDL_Renderer* renderer) {
     Mix_PlayMusic(s_gameState.faseAtual->musica, 0);
     s_gameState.musicStartTime = SDL_GetTicks();
 
+    s_gameState.debug = true;
+    if (s_gameState.debug){
+        const double pularParaSegundos = 275.0; 
+        Mix_SetMusicPosition(pularParaSegundos);
+        s_gameState.musicStartTime = SDL_GetTicks() - (Uint32)(pularParaSegundos * 1000.0);
+    }
+
     return 1;
 }
 
 void Game_HandleEvent(SDL_Event* e) {
-    
-    if (s_gameState.isGameOver){
-        // Conseguir fechar o jogo quando der GameOver, por enquanto deixarei assim.
-        if (e->type == SDL_QUIT || (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_ESCAPE)) {
-            s_gameState.gameIsRunning = false;
-        }
+    // Eventos universais que funcionam em qualquer estado
+    if (e->type == SDL_QUIT) {
+        s_gameState.gameIsRunning = false;
+        return;
+    }
+    if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_ESCAPE) {
+        s_gameState.gameIsRunning = false;
         return;
     }
 
-    if (s_gameState.isPaused) {
-        // Permite sair do jogo mesmo estando pausado
-        if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_ESCAPE) {
-            s_gameState.gameIsRunning = 0;
-        }
-        else if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_p) {
-            Uint32 pausedDuration = SDL_GetTicks() - s_gameState.pauseStartTime;
-            s_gameState.musicStartTime += pausedDuration;
-            Mix_ResumeMusic();
-            s_gameState.isPaused = !s_gameState.isPaused;
-        }
-        return;
-    }
+    // Lógica de Input baseada no Estado do Jogo 
+    switch (s_gameState.gameFlowState) {
+        case STATE_PLAYING: {
 
-    switch (e->type) {
-        case SDL_QUIT: {
-            s_gameState.gameIsRunning = false;
-            break;
-        }
-        case SDL_KEYDOWN: {
-            SDL_Keycode teclaPressionada = e->key.keysym.sym;
-
-            //Necessário para poder deixar a tecla pressionada, e ajustado para detectar se for erro ou não.
-             if (e->key.repeat != 0) {
-                bool isCurrentlyHolding = false;
-                // Verifica se o jogador já está no estado NOTA_SEGURANDO para esta tecla
-                for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
-                    Nota* nota = &s_gameState.faseAtual->beatmap[i];
-                    if (nota->estado == NOTA_SEGURANDO && nota->tecla == teclaPressionada) {
-                        isCurrentlyHolding = true;
-                        break;
-                    }
-                }
-                // Se estiver segurando corretamente uma nota longa, ignora o evento de repetição.
-                if (isCurrentlyHolding) {
-                    break; 
-                }
+            // Se estiver jogando, trata o pause e os inputs de jogo
+            if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_p && e->key.repeat == 0) {
+                s_gameState.gameFlowState = STATE_PAUSE;
+                s_gameState.pauseStartTime = SDL_GetTicks();
+                Mix_PauseMusic();
+                return;
             }
 
-            // Identifica qual checker foi ativado
-            int checkerIndex = -1;
-            switch (teclaPressionada) {
-                case SDLK_p:{
-                    s_gameState.pauseStartTime = SDL_GetTicks();
-                    s_gameState.isPaused = !s_gameState.isPaused;
-                    Mix_PauseMusic(); // Pausa a música
-                }return;
-                case SDLK_ESCAPE:{
-                    s_gameState.gameIsRunning = false; return;
-                } 
-                case SDLK_z: {
-                    checkerIndex = 0; break;
-                }     
-                case SDLK_x: {
-                    checkerIndex = 1; break;
-                }      
-                case SDLK_c:{
-                    checkerIndex = 2; break;
-                }      
-                case SDLK_SPACE: {
-                    if (s_gameState.specialMeter >= 100.0f && !s_gameState.isSpecialActive) {
-                        s_gameState.isSpecialActive = true;
-                        s_gameState.specialTimer = SPECIAL_DURATION;
-                        printf("ESPECIAL ATIVADO!\n");
-                    }
-                    return;
-                }
-                default: {
-                    // Se não for uma tecla do jogo, encerra o evento.
-                    return;
-                } 
-            }
+            switch (e->type) {
+                case SDL_KEYDOWN: {
 
-            // Com o checker identificado, executa a lógica principal
-            Checker* checker = &s_gameState.checkers[checkerIndex];
-
-            // Ativa o highlight visual do checker
-            checker->isPressedTimer = 0.15f;
-
-            bool acertouNota = false;
-
-            // Procura por uma nota correspondente para o checker ativado
-            for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
-                Nota* nota = &s_gameState.faseAtual->beatmap[i];
-
-                // Pula notas que não estão ativas ou não são para esta tecla
-                if (nota->estado != NOTA_ATIVA || nota->tecla != checker->tecla) {
-                    continue;
-                }
-
-                // Calcula a distância usando a posição do checker que já temos
-                float dist = fabsf(nota->pos.x - checker->rect.x);
-
-                if (dist <= HIT_WINDOW_OK) { // Checa a janela mais larga primeiro
-                    //Diferenciar nota normal da nota longa
-                    if (nota->duration > 0) {
-                        nota->estado = NOTA_SEGURANDO;
-                    } else {
-                        nota->estado = NOTA_ATINGIDA;
-                    }
-                    acertouNota = true;
-                    s_gameState.combo++;
-
-                    if (s_gameState.combo > 0 && s_gameState.combo % 50 == 0) {
-                        s_gameState.comboPulseTimer = 0.3f;
-                    }
-
-                    int points = 0;
-                    
-                    // Definir a precisão
-                    if (dist <= HIT_WINDOW_OTIMO) {
-                        // Recompensas de "Ótimo"
-                        points = 20;
-                        s_gameState.health += 2.0f;
-                        if (!s_gameState.isSpecialActive) { s_gameState.specialMeter += 0.75f + (s_gameState.combo * 0.1f); }
-                        SpawnFeedbackText(0, checker->rect); // 0 = Ótimo
-                    } 
-                    else if (dist <= HIT_WINDOW_BOM) {
-                        // Recompensas de "Bom"
-                        points = 10;
-                        s_gameState.health += 1.0f;
-                        if (!s_gameState.isSpecialActive) { s_gameState.specialMeter += 0.5f + (s_gameState.combo * 0.1f); }
-                        SpawnFeedbackText(1, checker->rect); // 1 = Bom
-                    } 
-                    else {
-                        //Recompensas de "Ok"
-                        points = 2;
-                        s_gameState.health += 0.5f; // Recupera menos vida
-                        if (!s_gameState.isSpecialActive) { s_gameState.specialMeter += 0.25f; } // Quase não ganha especial
-                        SpawnFeedbackText(2, checker->rect); // 2 = Ok
-                    }
-                    
-                    // Limita a vida e o especial para não passarem de 100
-                    if (s_gameState.health > 100.0f) s_gameState.health = 100.0f;
-                    if (s_gameState.specialMeter > 100.0f) s_gameState.specialMeter = 100.0f;
-                    
-                    // Aplica os multiplicadores de combo e especial
-                    if (nota->duration > 0) {
-                        // NOTA LONGA: Apenas muda o estado. NENHUM PONTO É ADICIONADO AQUI.
-                        nota->estado = NOTA_SEGURANDO;
-                    } else {
-                        // NOTA NORMAL: Pontuação é calculada e adicionada agora.
-                        nota->estado = NOTA_ATINGIDA;
-                        points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
-                        if (s_gameState.isSpecialActive) points *= 2;
-                        s_gameState.score += points;
-                    }
-                    
-                    break;
-                }
-            }
-
-            // Se o loop terminou e nenhuma nota foi acertada, foi um erro
-            if (!acertouNota) {
-                s_gameState.combo = 0;
-                // Perde vida ao errar
-                s_gameState.health -= 5.0f; // Perde 5% de vida
-                if (s_gameState.health < 0.0f) s_gameState.health = 0.0f;
-
-                printf("ERROU! Combo resetado.\n");
-            }
-            break;
-        }
-
-        //Case para quando soltar a tecla pressionada
-        case SDL_KEYUP: {
-            if (e->key.repeat != 0) break;
-            SDL_Keycode teclaSolta = e->key.keysym.sym;
-
-            int checkerIndex = -1;
-            if (teclaSolta == SDLK_z) checkerIndex = 0;
-            else if (teclaSolta == SDLK_x) checkerIndex = 1;
-            else if (teclaSolta == SDLK_c) checkerIndex = 2;
-            else break;
-            
-            Checker* checker = &s_gameState.checkers[checkerIndex];
-
-            // Procura uma nota que estava sendo segurada com esta tecla
-            for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
-                Nota* nota = &s_gameState.faseAtual->beatmap[i];
-                if (nota->estado == NOTA_SEGURANDO && nota->tecla == teclaSolta) {
-                    
-                    float bodyLength = NOTE_SPEED * (nota->duration / 1000.0f);
-                    float tail_pos_x = nota->pos.x + bodyLength;
-                    float dist = fabsf(tail_pos_x - checker->rect.x);
-
-                    //Precisão ao soltar a tecla em notas longas
-                    if (dist <= HIT_WINDOW_OK) {
-                        nota->estado = NOTA_ATINGIDA;
-                        s_gameState.combo++; // Bônus de combo por finalizar
-
-                        int points = 0;
-                        int feedbackType = 0;
-                        
-                        if (dist <= HIT_WINDOW_OTIMO) {
-                            points = 40; feedbackType = 0; // Ótimo
-                        } else if (dist <= HIT_WINDOW_BOM) {
-                            points = 20; feedbackType = 1; // Bom
-                        } else {
-                            points = 5; feedbackType = 2; // Ok
+                    //Necessário para poder deixar a tecla pressionada, e ajustado para detectar se for erro ou não.
+                    if (e->key.repeat != 0) {
+                        bool isCurrentlyHolding = false;
+                        for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+                            Nota* nota = &s_gameState.faseAtual->beatmap[i];
+                            if (nota->estado == NOTA_SEGURANDO && nota->tecla == e->key.keysym.sym) {
+                                isCurrentlyHolding = true;
+                                break;
+                            }
                         }
-                        
-                        // Pontuação completa da nota longa é calculada e aplicada aqui (Se não soltou corretamente, não ganha ponto algum)
-                        points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
-                        if (s_gameState.isSpecialActive) points *= 2;
-                        s_gameState.score += points;
-
-                        SpawnFeedbackText(feedbackType, checker->rect);
-
-                    } else { // Soltou fora da janela de acerto
-                        nota->estado = NOTA_QUEBRADA;
-                        nota->despawnTimer = 0.5f;
-                        s_gameState.combo = 0;
-                        s_gameState.health -= 2.0f;
+                        if (isCurrentlyHolding) break;
                     }
-                    break;
+
+                    SDL_Keycode teclaPressionada = e->key.keysym.sym;
+                    int checkerIndex = -1;
+
+                    // Identifica qual checker foi ativado
+                    switch (teclaPressionada) {
+                        case SDLK_z:{
+                            checkerIndex = 0; break;
+                        } 
+                        case SDLK_x:{
+                            checkerIndex = 1; break;
+                        } 
+                        case SDLK_c:{
+                             checkerIndex = 2; break;
+                        }
+                        case SDLK_SPACE:
+                            if (s_gameState.specialMeter >= 100.0f && !s_gameState.isSpecialActive) {
+                                s_gameState.isSpecialActive = true;
+                                s_gameState.specialTimer = SPECIAL_DURATION;
+                            }
+                            return;
+                        default:{
+                            return;
+                        } 
+                    }
+
+                    // Com o checker identificado, executa a lógica principal
+                    Checker* checker = &s_gameState.checkers[checkerIndex];
+                    checker->isPressedTimer = 0.15f;
+                    bool acertouNota = false;
+
+                    // Procura por uma nota correspondente para o checker ativado
+                    for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+                        Nota* nota = &s_gameState.faseAtual->beatmap[i];
+                        if (nota->estado != NOTA_ATIVA || nota->tecla != checker->tecla) continue;
+
+                        float dist = fabsf(nota->pos.x - checker->rect.x);
+                        if (dist <= HIT_WINDOW_OK) {
+                            s_gameState.notesHit++;
+                            acertouNota = true;
+                            s_gameState.combo++;
+                            if (s_gameState.combo > 0 && s_gameState.combo % 50 == 0) s_gameState.comboPulseTimer = 0.3f;
+                            
+                            int points = 0; int feedbackType = 0;
+                            // Definir a precisão
+                            if (dist <= HIT_WINDOW_OTIMO) {
+                                points = 20; feedbackType = 0; s_gameState.health += 2.0f;
+                                if (!s_gameState.isSpecialActive) { 
+                                    s_gameState.specialMeter += 0.75f + (s_gameState.combo * 0.1f); 
+                                }
+                            } else if (dist <= HIT_WINDOW_BOM) {
+                                points = 10; feedbackType = 1; s_gameState.health += 1.0f;
+                                if (!s_gameState.isSpecialActive) { 
+                                    s_gameState.specialMeter += 0.5f + (s_gameState.combo * 0.1f); 
+                                }
+                            } else {
+                                points = 2; feedbackType = 2; s_gameState.health += 0.5f;
+                                if (!s_gameState.isSpecialActive) {
+                                    s_gameState.specialMeter += 0.25f; 
+                                }
+                            }
+
+                            SpawnFeedbackText(feedbackType, checker->rect);
+                            
+                            //Diferenciar nota normal da nota longa
+                            if (nota->duration > 0) {
+                                nota->estado = NOTA_SEGURANDO;
+                            } else {
+                                nota->estado = NOTA_ATINGIDA;
+                                points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
+                                if (s_gameState.isSpecialActive) points *= 2;
+                                s_gameState.score += points;
+                            }
+                            if (s_gameState.health > 100.0f) {
+                                s_gameState.health = 100.0f;
+                            } 
+                            if (s_gameState.specialMeter > 100.0f) {
+                                s_gameState.specialMeter = 100.0f;
+                            } 
+                            break;
+                        }
+                    }
+                    if (!acertouNota) {
+                        s_gameState.combo = 0;
+                        s_gameState.health -= 5.0f;
+                        if (s_gameState.health < 0.0f) s_gameState.health = 0.0f;
+                    }
+                } break;
+
+                //Case para quando soltar a tecla pressionada
+                case SDL_KEYUP: {
+                    if (e->key.repeat != 0) break;
+                    SDL_Keycode teclaSolta = e->key.keysym.sym;
+                    int checkerIndex = -1;
+                    if (teclaSolta == SDLK_z) checkerIndex = 0; else if (teclaSolta == SDLK_x) checkerIndex = 1; else if (teclaSolta == SDLK_c) checkerIndex = 2; else break;
+                    Checker* checker = &s_gameState.checkers[checkerIndex];
+                    
+                    // Procura uma nota que estava sendo segurada com esta tecla
+                    for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+                        Nota* nota = &s_gameState.faseAtual->beatmap[i];
+                        if (nota->estado == NOTA_SEGURANDO && nota->tecla == teclaSolta) {
+                            float bodyLength = NOTE_SPEED * (nota->duration / 1000.0f);
+                            float tail_pos_x = nota->pos.x + bodyLength;
+                            float dist = fabsf(tail_pos_x - checker->rect.x);
+
+                            //Precisão ao soltar a tecla em notas longas
+                            if (dist <= HIT_WINDOW_OK) {
+                                nota->estado = NOTA_ATINGIDA; s_gameState.combo++;
+                                int points = 0; int feedbackType = 0;
+                                if (dist <= HIT_WINDOW_OTIMO) { points = 40; feedbackType = 0; }
+                                else if (dist <= HIT_WINDOW_BOM) { points = 20; feedbackType = 1; }
+                                else { points = 5; feedbackType = 2; }
+                                
+                                // Pontuação completa da nota longa é calculada e aplicada aqui
+                                points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
+                                if (s_gameState.isSpecialActive) points *= 2;
+                                s_gameState.score += points;
+                                SpawnFeedbackText(feedbackType, checker->rect);
+                            } else {
+                                nota->estado = NOTA_QUEBRADA; nota->despawnTimer = 0.5f;
+                                s_gameState.combo = 0; s_gameState.health -= 2.0f;
+                            }
+                            break;
+                        }
+                    }
+                } break;
+            }
+        } break; // Fim do case STATE_PLAYING
+
+        case STATE_PAUSE: {
+            // Se estiver pausado, a única tecla que importa é 'P' para despausar
+            if (e->type == SDL_KEYDOWN && e->key.keysym.sym == SDLK_p && e->key.repeat == 0) {
+                s_gameState.gameFlowState = STATE_PLAYING;
+                Uint32 pausedDuration = SDL_GetTicks() - s_gameState.pauseStartTime;
+                s_gameState.musicStartTime += pausedDuration;
+                Mix_ResumeMusic();
+            }
+        } break;
+
+        // Lógica de Input para a Tela de Inserir Nome
+        case STATE_RESULTS_NAME_ENTRY: {
+             if (e->type == SDL_KEYDOWN && e->key.repeat == 0) {
+                SDL_Keycode key = e->key.keysym.sym;
+                if (key == SDLK_UP) {
+                    s_gameState.currentName[s_gameState.nameEntryCharIndex]++;
+                    if (s_gameState.currentName[s_gameState.nameEntryCharIndex] > 'Z') s_gameState.currentName[s_gameState.nameEntryCharIndex] = 'A';
+                } else if (key == SDLK_DOWN) {
+                    s_gameState.currentName[s_gameState.nameEntryCharIndex]--;
+                    if (s_gameState.currentName[s_gameState.nameEntryCharIndex] < 'A') s_gameState.currentName[s_gameState.nameEntryCharIndex] = 'Z';
+                } else if (key == SDLK_RIGHT) {
+                    s_gameState.nameEntryCharIndex = (s_gameState.nameEntryCharIndex + 1) % 3;
+                } else if (key == SDLK_LEFT) {
+                    s_gameState.nameEntryCharIndex = (s_gameState.nameEntryCharIndex - 1 + 3) % 3;
+                } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                    if (s_gameState.currentSongLeaderboard) {
+                        for (int i = MAX_LEADERBOARD_ENTRIES - 1; i > s_gameState.newHighscoreRank; --i) {
+                            s_gameState.currentSongLeaderboard->scores[i] = s_gameState.currentSongLeaderboard->scores[i - 1];
+                        }
+                        strcpy(s_gameState.currentSongLeaderboard->scores[s_gameState.newHighscoreRank].name, s_gameState.currentName);
+                        s_gameState.currentSongLeaderboard->scores[s_gameState.newHighscoreRank].score = s_gameState.finalScore;
+                        SaveLeaderboard();
+                    }
+                    s_gameState.gameFlowState = STATE_RESULTS_LEADERBOARD;
                 }
             }
         } break;
-    } 
+
+        // Lógica de Input para a Tela de Ranking Final (Botões)
+        case STATE_RESULTS_LEADERBOARD:{
+            if (e->type == SDL_KEYDOWN && e->key.repeat == 0) {
+                SDL_Keycode key = e->key.keysym.sym;
+
+                if (key == SDLK_UP) {
+                    // Move a seleção para cima, com loop (2 -> 1 -> 0 -> 2 ...)
+                    s_gameState.selectedButtonIndex = (s_gameState.selectedButtonIndex - 1 + 3) % 3;
+                } else if (key == SDLK_DOWN) {
+                    // Move a seleção para baixo, com loop (0 -> 1 -> 2 -> 0 ...)
+                    s_gameState.selectedButtonIndex = (s_gameState.selectedButtonIndex + 1) % 3;
+                } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                    // Ação ao pressionar Enter
+                    switch (s_gameState.selectedButtonIndex) {
+                        case 0: // Jogar Novamente
+                            s_gameState.needsRestart = true;
+                            s_gameState.gameIsRunning = false; // Encerra o loop de jogo atual
+                            break;
+                        case 1: // Voltar ao Menu (ainda não implementado)
+                            // Por enquanto, não faz nada
+                            break;
+                        case 2: // Sair
+                            s_gameState.gameIsRunning = false; // Encerra o jogo
+                            break;
+                    }
+                }
+            }
+        }break;
+
+        // Lógica de Input para a Tela de Ranking Final (Botões)
+        case STATE_RESULTS_ANIMATING:{}
+        case STATE_GAMEOVER:{break;}
+        // Nenhum input de jogo ativo aqui, apenas o ESC universal já tratado no topo
+    }
 }
 
-
 void Game_Update(float deltaTime) {
-    if (s_gameState.isPaused) return;
-    if (s_gameState.isGameOver) return;
-    if (!s_gameState.gameIsRunning || Mix_PlayingMusic() == 0) return;
-
-    //Uint32 tempoAtual = (Uint32)(Mix_GetMusicPosition(s_faseAtual->musica) * 1000.0);
-    Uint32 tempoAtual = SDL_GetTicks() - s_gameState.musicStartTime;
-
-    // Lógica do Especial e dos Confetes
-    if (s_gameState.isSpecialActive) {
-        s_gameState.specialTimer -= deltaTime;
-
-        // Atualiza o medidor para descer visualmente
-        s_gameState.specialMeter = (s_gameState.specialTimer / SPECIAL_DURATION) * 100.0f;
-        
-        // Cria 2 partículas por frame durante o especial
-        SpawnConfettiParticle();
-        SpawnConfettiParticle();
-
-        if (s_gameState.specialTimer <= 0) {
-            s_gameState.isSpecialActive = false;
-            printf("Especial acabou.\n");
-        }
+    // Lógica de Update baseada no Estado do Jogo 
+    if (s_gameState.debug){
+        s_gameState.health = 100;
     }
-
-    // Atualiza todas as partículas de confete ativas
-    for (int i = 0; i < MAX_CONFETTI; ++i) {
-        if (s_gameState.confetti[i].isActive) {
-            ConfettiParticle* p = &s_gameState.confetti[i];
-            p->lifetime -= deltaTime;
-            if (p->lifetime <= 0) {
-                p->isActive = false;
-                continue;
+    switch (s_gameState.gameFlowState) {
+        case STATE_PLAYING: {
+            if (!Mix_PlayingMusic() && s_gameState.gameIsRunning) {
+                // Se a música acabar por qualquer motivo, vai para os resultados
+                // (Isso é uma segurança, a checagem principal é pelo tempo)
             }
-            p->pos.x += p->velocity.x * deltaTime;
-            p->pos.y += p->velocity.y * deltaTime;
-            p->velocity.y += 300.0f * deltaTime;
-        }
-    }
 
-    // Spawner de notas
-    if (s_gameState.faseAtual->proximaNotaIndex < s_gameState.faseAtual->totalNotas) {
-        Nota* proxima = &s_gameState.faseAtual->beatmap[s_gameState.faseAtual->proximaNotaIndex];
-        if (tempoAtual >= proxima->spawnTime) {
-            proxima->estado = NOTA_ATIVA;
-            s_gameState.faseAtual->proximaNotaIndex++;
-        }
-    }
+            Uint32 tempoAtual = SDL_GetTicks() - s_gameState.musicStartTime;
 
-    // Atualizar notas
-    for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
-        Nota* nota = &s_gameState.faseAtual->beatmap[i];
-        
-        // Atualiza a posição apenas se a nota estiver em movimento
-        Note_Update(nota, deltaTime);
-
-        float checker_pos_x = 0;
-        for(int j=0; j < 3; ++j) {
-            if (s_gameState.checkers[j].tecla == nota->tecla) {
-                checker_pos_x = s_gameState.checkers[j].rect.x;
-                break;
+            // Lógica do Especial e dos Confetes
+            if (s_gameState.isSpecialActive) {
+                s_gameState.specialTimer -= deltaTime;
+                s_gameState.specialMeter = (s_gameState.specialTimer / SPECIAL_DURATION) * 100.0f;
+                SpawnConfettiParticle();
+                SpawnConfettiParticle();
+                if (s_gameState.specialTimer <= 0) {
+                    s_gameState.isSpecialActive = false;
+                    s_gameState.specialMeter = 0;
+                }
             }
-        }
-        
-        // Lógica de falha e limpeza
-        
-        // Checa se uma nota ativa foi perdida (passou do checker)
-        if (nota->estado == NOTA_ATIVA) {
-            if (nota->pos.x < (checker_pos_x - HIT_WINDOW_OK)) {
-                nota->estado = NOTA_INATIVA; 
-                s_gameState.combo = 0;
-                s_gameState.health -= 5.0f;
-                if (s_gameState.health < 0.0f) s_gameState.health = 0.0f;
-                printf("ERROU (Nota perdida)! Combo resetado.\n");
+
+            // Atualiza todas as partículas de confete ativas
+            for (int i = 0; i < MAX_CONFETTI; ++i) {
+                if (s_gameState.confetti[i].isActive) {
+                    ConfettiParticle* p = &s_gameState.confetti[i];
+                    p->lifetime -= deltaTime;
+                    if (p->lifetime <= 0) { p->isActive = false; continue; }
+                    p->pos.x += p->velocity.x * deltaTime;
+                    p->pos.y += p->velocity.y * deltaTime;
+                    p->velocity.y += 300.0f * deltaTime;
+                }
             }
-        } 
-        // Checa se o jogador segurou uma nota longa por tempo demais
-        else if (nota->estado == NOTA_SEGURANDO) {
-            float bodyLength = NOTE_SPEED * (nota->duration / 1000.0f);
-            float tail_pos_x = nota->pos.x + bodyLength;
 
-            if (tail_pos_x < (checker_pos_x - HIT_WINDOW_OK)) {
-                nota->estado = NOTA_INATIVA;
-                s_gameState.combo = 0;
-                s_gameState.health -= 2.0f;
-                printf("ERROU (Não soltou a tempo)! Combo resetado.\n");
+            // Spawner de notas
+            if (s_gameState.faseAtual->proximaNotaIndex < s_gameState.faseAtual->totalNotas) {
+                Nota* proxima = &s_gameState.faseAtual->beatmap[s_gameState.faseAtual->proximaNotaIndex];
+                if (tempoAtual >= proxima->spawnTime) {
+                    proxima->estado = NOTA_ATIVA;
+                    s_gameState.faseAtual->proximaNotaIndex++;
+                }
             }
-        }
 
-        // Processa o timer de desaparecimento 
-        if (nota->despawnTimer > 0) {
-            nota->despawnTimer -= deltaTime;
-            if (nota->despawnTimer <= 0) {
-                nota->estado = NOTA_INATIVA;
+            // Atualizar notas
+            for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+                Nota* nota = &s_gameState.faseAtual->beatmap[i];
+                
+                // Atualiza a posição apenas se a nota estiver em movimento
+                if (nota->estado == NOTA_ATIVA || nota->estado == NOTA_SEGURANDO) {
+                    Note_Update(nota, deltaTime);
+                }
+                
+                float checker_pos_x = 0;
+                for(int j=0; j < 3; ++j) {
+                    if (s_gameState.checkers[j].tecla == nota->tecla) {
+                        checker_pos_x = s_gameState.checkers[j].rect.x;
+                        break;
+                    }
+                }
+                
+                // Checar perda
+                if (nota->estado == NOTA_ATIVA) {
+                    if (nota->pos.x < (checker_pos_x - HIT_WINDOW_OK)) {
+                        nota->estado = NOTA_INATIVA; 
+                        s_gameState.combo = 0;
+                        s_gameState.health -= 5.0f;
+                    }
+                } 
+
+                // Checa se o jogador segurou uma nota longa por tempo demais
+                else if (nota->estado == NOTA_SEGURANDO) {
+                    float bodyLength = NOTE_SPEED * (nota->duration / 1000.0f);
+                    float tail_pos_x = nota->pos.x + bodyLength;
+                    if (tail_pos_x < (checker_pos_x - HIT_WINDOW_OK)) {
+                        nota->estado = NOTA_INATIVA;
+                        s_gameState.combo = 0;
+                        s_gameState.health -= 2.0f;
+                    }
+                }
+
+                // Processa o timer de desaparecimento
+                if (nota->despawnTimer > 0) {
+                    nota->despawnTimer -= deltaTime;
+                    if (nota->despawnTimer <= 0) {
+                        nota->estado = NOTA_INATIVA;
+                    }
+                }
             }
-        }
-    }
 
-    // Atualiza os timers de feedback dos checkers
-    for (int i = 0; i < 3; ++i) {
-        if (s_gameState.checkers[i].isPressedTimer > 0) {
-            s_gameState.checkers[i].isPressedTimer -= deltaTime;
-        }
-    }
+            // Atualiza os timers de feedback dos checkers
+            for (int i = 0; i < 3; ++i) {
+                if (s_gameState.checkers[i].isPressedTimer > 0) {
+                    s_gameState.checkers[i].isPressedTimer -= deltaTime;
+                }
+            }
 
-    // Atualiza timers de feedback
-    if (s_gameState.comboPulseTimer > 0) {
-        s_gameState.comboPulseTimer -= deltaTime;
-    }
+            // Atualiza timers de feedback
+            if (s_gameState.comboPulseTimer > 0) {
+                s_gameState.comboPulseTimer -= deltaTime;
+            }
 
-    for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
-        if (s_gameState.feedbackTexts[i].isActive) {
-            FeedbackText* ft = &s_gameState.feedbackTexts[i];
-            ft->lifetime -= deltaTime;
-            if (ft->lifetime <= 0) {
-                ft->isActive = false;
+            for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
+                if (s_gameState.feedbackTexts[i].isActive) {
+                    FeedbackText* ft = &s_gameState.feedbackTexts[i];
+                    ft->lifetime -= deltaTime;
+                    if (ft->lifetime <= 0) {
+                        ft->isActive = false;
+                    } else {
+                        ft->pos.y -= 50.0f * deltaTime;
+                    }
+                }
+            }
+
+            // Checa se a música acabou para iniciar a tela de resultados
+            if (tempoAtual >= 287000) { // Duração da música em ms
+                s_gameState.gameFlowState = STATE_RESULTS_ANIMATING;
+                s_gameState.finalScore = s_gameState.score;
+                s_gameState.displayedScore = 0;
+                if (s_gameState.faseAtual->totalNotas > 0) {
+                    s_gameState.accuracy = ((float)s_gameState.notesHit / (float)s_gameState.faseAtual->totalNotas) * 100.0f;
+                }
+
+                s_gameState.newHighscoreRank = -1;
+                if (s_gameState.currentSongLeaderboard) {
+                    for (int i = 0; i < MAX_LEADERBOARD_ENTRIES; ++i) {
+                        if (s_gameState.finalScore > s_gameState.currentSongLeaderboard->scores[i].score) {
+                            s_gameState.newHighscoreRank = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            // Checagem de Game Over
+            if (s_gameState.health <= 0) {
+                s_gameState.gameFlowState = STATE_GAMEOVER;
+                Mix_HaltMusic();
+                if (s_gameState.failSound) Mix_PlayChannel(-1, s_gameState.failSound, 0);
+            }
+            if(s_gameState.health < 0.0f) s_gameState.health = 0.0f;
+
+        } break;
+
+        // Lógica da animação do placar
+        case STATE_RESULTS_ANIMATING: {
+            if (s_gameState.displayedScore < s_gameState.finalScore) {
+                int increment = (int)((s_gameState.finalScore / 2.0f) * deltaTime) + 1;
+                s_gameState.displayedScore += increment;
             } else {
-                // Efeito de subir e sumir
-                ft->pos.y -= 50.0f * deltaTime;
+                s_gameState.displayedScore = s_gameState.finalScore;
+                if (s_gameState.newHighscoreRank != -1) {
+                    s_gameState.gameFlowState = STATE_RESULTS_NAME_ENTRY;
+                    strcpy(s_gameState.currentName, "AAA");
+                    s_gameState.nameEntryCharIndex = 0;
+                } else {
+                    s_gameState.gameFlowState = STATE_RESULTS_LEADERBOARD;
+                    s_gameState.selectedButtonIndex = 0; // NOVO: Seleciona "Jogar Novamente" por padrão
+                }
             }
-        }
-    }
+        } break;
 
-    // Checagem de Game Over
-    if (s_gameState.health <= 0 && !s_gameState.isGameOver) {
-        s_gameState.isGameOver = true;
-        Mix_HaltMusic(); // Para a música Principal
-
-        // Toca o som de falha
-        if (s_gameState.failSound) {
-            Mix_PlayChannel(-1, s_gameState.failSound, 0);
-        }
-
-        printf("GAME OVER!\n");
+        case STATE_PAUSE:
+        case STATE_RESULTS_NAME_ENTRY:
+        case STATE_RESULTS_LEADERBOARD:
+        case STATE_GAMEOVER:
+            // Nestes estados, nenhuma lógica de "update" de jogo é necessária.
+            break;
     }
 }
 
@@ -705,7 +812,8 @@ void Game_Render(SDL_Renderer* renderer) {
     rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
 
     // Mensagem de Game Over
-    if (s_gameState.isGameOver && s_gameState.font) {
+    if ((s_gameState.gameFlowState == STATE_GAMEOVER) && s_gameState.font) {
+        boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 200);
         SDL_Color red = {255, 0, 0, 255};
         SDL_Surface* surfGO = TTF_RenderText_Blended(s_gameState.font, "FIM DE JOGO", red);
         SDL_Texture* texGO = SDL_CreateTextureFromSurface(renderer, surfGO);
@@ -715,8 +823,8 @@ void Game_Render(SDL_Renderer* renderer) {
         SDL_DestroyTexture(texGO);
     }
 
-    // Desenha a tela de PAUSE se o jogo estiver pausado ---
-    if (s_gameState.isPaused && s_gameState.font) {
+    // Desenha a tela de PAUSE se o jogo estiver pausado 
+    if ((s_gameState.gameFlowState == STATE_PAUSE) && s_gameState.font) {
         // 1. Desenha uma camada escura semi-transparente sobre o jogo
         boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 150);
 
@@ -734,6 +842,77 @@ void Game_Render(SDL_Renderer* renderer) {
             SDL_RenderCopy(renderer, texPause, NULL, &dstPause);
             SDL_FreeSurface(surfPause);
             SDL_DestroyTexture(texPause);
+        }
+    }
+
+     // Telas de Resultado (após a música terminar)
+    if ((s_gameState.gameFlowState >= STATE_RESULTS_ANIMATING) && (s_gameState.gameFlowState != STATE_GAMEOVER)) {
+        boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 200); // Fundo escuro
+        
+        char buffer[128];
+        SDL_Color white = {255, 255, 255, 255};
+        SDL_Color gold = {255, 223, 0, 255};
+        
+        // Renderiza placar e precisão (comuns a todas as telas de resultado)
+        sprintf(buffer, "%d", s_gameState.displayedScore);
+        RenderText(renderer, "Placar Final", SCREEN_WIDTH / 2, 100, white, true);
+        RenderText(renderer, buffer, SCREEN_WIDTH / 2, 150, gold, true);
+        
+        sprintf(buffer, "Precisao: %.2f%%", s_gameState.accuracy);
+        RenderText(renderer, buffer, SCREEN_WIDTH / 2, 200, white, true);
+
+        // Renderiza a tela de inserir nome
+        if (s_gameState.gameFlowState == STATE_RESULTS_NAME_ENTRY) {
+            RenderText(renderer, "NOVO RECORDE!", SCREEN_WIDTH / 2, 300, gold, true);
+            RenderText(renderer, "Insira seu nome:", SCREEN_WIDTH / 2, 350, white, true);
+
+            // Desenha as 3 letras
+            for (int i = 0; i < 3; ++i) {
+                char letterStr[2] = {s_gameState.currentName[i], '\0'};
+                int x_pos = SCREEN_WIDTH / 2 + (i - 1) * 60; // Espaçamento
+                
+                // Pisca a letra selecionada
+                bool showChar = true;
+                if (i == s_gameState.nameEntryCharIndex && (SDL_GetTicks() / 400) % 2 == 0) {
+                    showChar = false;
+                }
+
+                if (showChar) {
+                    RenderText(renderer, letterStr, x_pos, 420, white, true);
+                }
+                // Desenha um sublinhado
+                boxRGBA(renderer, x_pos - 20, 450, x_pos + 20, 452, 255, 255, 255, 255);
+            }
+        }
+        // Renderiza a tela de ranking final 
+        else if (s_gameState.gameFlowState == STATE_RESULTS_LEADERBOARD) {
+            const char* title = (s_gameState.newHighscoreRank != -1) ? "Parabens!" : "Ranking da Musica";
+            RenderText(renderer, title, SCREEN_WIDTH / 2, 60, gold, true);
+
+            // Desenha o ranking em 2 colunas
+            for (int i = 0; i < 5; ++i) {
+                // Coluna 1 (1-5)
+                sprintf(buffer, "%2d. %s", i + 1, s_gameState.currentSongLeaderboard->scores[i].name);
+                RenderText(renderer, buffer, SCREEN_WIDTH / 4, 280 + i * 40, white, false);
+                sprintf(buffer, "%d", s_gameState.currentSongLeaderboard->scores[i].score);
+                RenderText(renderer, buffer, SCREEN_WIDTH / 4 + 200, 280 + i * 40, white, false);
+
+                // Coluna 2 (6-10)
+                sprintf(buffer, "%2d. %s", i + 6, s_gameState.currentSongLeaderboard->scores[i+5].name);
+                RenderText(renderer, buffer, SCREEN_WIDTH / 2 + 100, 280 + i * 40, white, false);
+                sprintf(buffer, "%d", s_gameState.currentSongLeaderboard->scores[i+5].score);
+                RenderText(renderer, buffer, SCREEN_WIDTH / 2 + 300, 280 + i * 40, white, false);
+            }
+
+            // Desenha os botões com feedback de seleção
+           const char* buttonLabels[] = {"Jogar Novamente", "Voltar ao Menu", "Sair"};
+            SDL_Color selectedColor = {255, 223, 0, 255}; // Dourado
+            SDL_Color normalColor = {255, 255, 255, 255};   // Branco
+
+            for (int i = 0; i < 3; ++i) {
+                SDL_Color color = (i == s_gameState.selectedButtonIndex) ? selectedColor : normalColor;
+                RenderText(renderer, buttonLabels[i], SCREEN_WIDTH / 2, 550 + i * 50, color, true);
+            }
         }
     }
 
@@ -802,6 +981,52 @@ static void SpawnConfettiParticle() {
     }
 }
 
+static void FindOrCreateCurrentSongLeaderboard(const char* songName) {
+    // Procura se já existe um leaderboard para esta música
+    for (int i = 0; i < s_leaderboardData.songCount; ++i) {
+        if (strcmp(s_leaderboardData.songLeaderboards[i].songName, songName) == 0) {
+            s_gameState.currentSongLeaderboard = &s_leaderboardData.songLeaderboards[i];
+            return;
+        }
+    }
+
+    // Se não encontrou, cria um novo (se houver espaço)
+    if (s_leaderboardData.songCount < MAX_SONGS_IN_LEADERBOARD) {
+        int newIndex = s_leaderboardData.songCount;
+        s_gameState.currentSongLeaderboard = &s_leaderboardData.songLeaderboards[newIndex];
+        
+        // Inicializa o novo leaderboard
+        strcpy(s_gameState.currentSongLeaderboard->songName, songName);
+        for (int i = 0; i < MAX_LEADERBOARD_ENTRIES; ++i) {
+            strcpy(s_gameState.currentSongLeaderboard->scores[i].name, "---");
+            s_gameState.currentSongLeaderboard->scores[i].score = 0;
+        }
+        s_leaderboardData.songCount++;
+    } else {
+        s_gameState.currentSongLeaderboard = NULL; // Não há mais espaço
+    }
+}
+
+// Tenta carregar o placar de líderes de um arquivo. Se não existir, cria um zerado.
+static void LoadLeaderboard() {
+    FILE* file = fopen("leaderboards.dat", "rb");
+    if (file) {
+        fread(&s_leaderboardData, sizeof(LeaderboardData), 1, file);
+        fclose(file);
+    } else {
+        // Se o arquivo não existe, apenas zera a contagem
+        s_leaderboardData.songCount = 0;
+    }
+}
+
+static void SaveLeaderboard() {
+    FILE* file = fopen("leaderboards.dat", "wb");
+    if (file) {
+        fwrite(&s_leaderboardData, sizeof(LeaderboardData), 1, file);
+        fclose(file);
+    }
+}
+
 static void SpawnFeedbackText(int type, SDL_Rect checkerRect) {
     for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
         if (!s_gameState.feedbackTexts[i].isActive) {
@@ -841,6 +1066,30 @@ static void SpawnFeedbackText(int type, SDL_Rect checkerRect) {
     }
 }
 
+static void RenderText(SDL_Renderer* renderer, const char* text, int x, int y, SDL_Color color, bool center) {
+    if (!s_gameState.font || !text) return;
+
+    SDL_Surface* surface = TTF_RenderText_Blended(s_gameState.font, text, color);
+    if (!surface) return;
+
+    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
+    if (!texture) {
+        SDL_FreeSurface(surface);
+        return;
+    }
+
+    SDL_Rect destRect = { x, y, surface->w, surface->h };
+    if (center) {
+        destRect.x = x - surface->w / 2;
+        destRect.y = y - surface->h / 2;
+    }
+
+    SDL_RenderCopy(renderer, texture, NULL, &destRect);
+
+    SDL_FreeSurface(surface);
+    SDL_DestroyTexture(texture);
+}
+
 void Game_Shutdown() {
     Fase_Liberar(s_gameState.faseAtual);
 
@@ -876,6 +1125,10 @@ void Game_Shutdown() {
     TTF_Quit();
 }
 
-int Game_IsRunning() {
+bool Game_NeedsRestart() {
+    return s_gameState.needsRestart;
+}
+
+bool Game_IsRunning() {
     return s_gameState.gameIsRunning;
 }
