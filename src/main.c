@@ -6,6 +6,7 @@
 #include <SDL2/SDL_ttf.h>
 #include "defs.h"
 #include "game.h"
+#include "auxFuncs/auxWaitEvent.h"
 
 // Inicializa todos os subsistemas da SDL de uma só vez.
 // Retorna 'true' em caso de sucesso, 'false' em caso de falha.
@@ -85,7 +86,8 @@ int main(int argc, char* argv[]) {
         // Loop de uma única partida
         while (Game_IsRunning()) {
             SDL_Event e;
-            while (SDL_PollEvent(&e) != 0) {
+            Uint32 timeout = 16;
+            while (AUX_WaitEventTimeout(&e, &timeout ) != 0) {
                 Game_HandleEvent(&e);
             }
 

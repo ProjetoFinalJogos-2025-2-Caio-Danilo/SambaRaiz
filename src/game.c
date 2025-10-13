@@ -246,7 +246,7 @@ int Game_Init(SDL_Renderer* renderer) {
     Mix_PlayMusic(s_gameState.faseAtual->musica, 0);
     s_gameState.musicStartTime = SDL_GetTicks();
 
-    s_gameState.debug = true;
+    s_gameState.debug = false;
     if (s_gameState.debug){
         const double pularParaSegundos = 275.0; 
         Mix_SetMusicPosition(pularParaSegundos);
@@ -615,7 +615,7 @@ void Game_Update(float deltaTime) {
             }
 
             // Checa se a música acabou para iniciar a tela de resultados
-            if (tempoAtual >= 287000) { // Duração da música em ms
+            if (tempoAtual >= s_gameState.faseAtual->durationMs) { // Duração da música em ms
                 s_gameState.gameFlowState = STATE_RESULTS_ANIMATING;
                 s_gameState.finalScore = s_gameState.score;
                 s_gameState.displayedScore = 0;
@@ -657,7 +657,7 @@ void Game_Update(float deltaTime) {
                     s_gameState.nameEntryCharIndex = 0;
                 } else {
                     s_gameState.gameFlowState = STATE_RESULTS_LEADERBOARD;
-                    s_gameState.selectedButtonIndex = 0; // NOVO: Seleciona "Jogar Novamente" por padrão
+                    s_gameState.selectedButtonIndex = 0; // Seleciona "Jogar Novamente" por padrão
                 }
             }
         } break;

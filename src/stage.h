@@ -15,6 +15,7 @@ typedef struct {
     Nota beatmap[MAX_NOTAS_POR_FASE];
     int totalNotas;
     int proximaNotaIndex; // Para saber qual a próxima nota a ser spawnada
+    Uint32 durationMs; // Duração da música em MS
 } Fase;
 
 // Carrega os recursos da fase e define o beatmap

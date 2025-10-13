@@ -2,6 +2,7 @@
 MUSICA:assets/music/MeuLugar_ArlindoCruz.mp3
 BACKGROUND:assets/image/meuLugarBG.png
 RHYTHMTRACK:assets/image/rhythmTrack.png
+DURACAO_MS:287000
 ---
 # Dados do Beatmap (formato: tipo,tecla,tempo,duração)
 

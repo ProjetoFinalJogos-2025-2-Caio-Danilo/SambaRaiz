@@ -48,6 +48,9 @@ Fase* Fase_CarregarDeArquivo(SDL_Renderer* renderer, const char* caminhoDoArquiv
             } else if (strcmp(chave, "RHYTHMTRACK") == 0) {
                 fase->rhythmTrack = IMG_LoadTexture(renderer, valor);
             }
+            else if (strcmp(chave, "DURACAO_MS") == 0) {
+                fase->durationMs = (Uint32)atoi(valor);
+            }
         }
     }
 
