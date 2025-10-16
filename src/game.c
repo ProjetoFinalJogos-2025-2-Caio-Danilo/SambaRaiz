@@ -2,6 +2,9 @@
 #include "defs.h"
 #include "stage.h"
 #include "note.h"
+#include "leaderboard.h"
+#include "app.h"
+#include "auxFuncs/utils.h"
 #include <stdio.h>
 #include <time.h>
 #include <stdbool.h>
@@ -26,23 +29,6 @@ typedef enum {
     STATE_PAUSE,
     STATE_GAMEOVER
 } GameFlowState;
-
-typedef struct {
-    char name[4]; 
-    int score;
-} HighScore;
-
-// Estrutura que agrupa os recordes de UMA música
-typedef struct {
-    char songName[SONG_NAME_MAX_LEN];
-    HighScore scores[MAX_LEADERBOARD_ENTRIES];
-} SongLeaderboard;
-
-// Estrutura principal que será salva em arquivo
-typedef struct {
-    int songCount;
-    SongLeaderboard songLeaderboards[MAX_SONGS_IN_LEADERBOARD];
-} LeaderboardData;
 
 // Estruturas para cache de texturas e organização
 typedef struct {
@@ -121,6 +107,8 @@ typedef struct {
     int selectedButtonIndex;
     bool needsRestart;
 
+    ApplicationState nextApplicationState; // Guarda o estado para retornar à main
+
     bool debug;
 
 } GameState;
@@ -133,12 +121,11 @@ static LeaderboardData s_leaderboardData;
 static void SaveLeaderboard();
 static void LoadLeaderboard();
 static void FindOrCreateCurrentSongLeaderboard(const char* songName);
-static void RenderText(SDL_Renderer* renderer, const char* text, int x, int y, SDL_Color color, bool center);
 static void SpawnConfettiParticle();
 static void SpawnFeedbackText(int type, SDL_Rect checkerRect);
 static void UpdateTextureCache(SDL_Renderer* renderer);
 
-int Game_Init(SDL_Renderer* renderer) {
+int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
     // Evitar lixo de memória
     memset(&s_gameState, 0, sizeof(GameState));
 
@@ -158,9 +145,11 @@ int Game_Init(SDL_Renderer* renderer) {
     s_gameState.isSpecialActive = false;
     s_gameState.specialTimer = 0.0f;
 
+    s_gameState.nextApplicationState = APP_STATE_MENU; // Padrão é voltar ao menu
+
     // Inicializa o gerador de números aleatórios
     srand(time(NULL));
-
+    
     // Inicializa TTF
     if (TTF_Init() == -1) {
         printf("Erro ao inicializar SDL2_ttf: %s\n", TTF_GetError());
@@ -199,15 +188,29 @@ int Game_Init(SDL_Renderer* renderer) {
         return 0; // Falha na inicialização
     }
 
-    // Carrega a fase
-    s_gameState.faseAtual = Fase_CarregarDeArquivo(renderer, "assets/beatMaps/meu_lugar.samba");
+    s_gameState.faseAtual = Fase_CarregarDeArquivo(renderer, songFilePath);
     if (!s_gameState.faseAtual) {
         return 0; // Falha ao carregar a fase
     }
 
+
     // Encontra o leaderboard específico para esta música
     LoadLeaderboard();
-    FindOrCreateCurrentSongLeaderboard("MeuLugar"); // Use um nome para identificar a música
+
+    // Use uma parte do nome do arquivo para o leaderboard
+    const char* simpleName = strrchr(songFilePath, '/');
+    if (simpleName) {
+        simpleName++; // Pula a barra '/'
+    } else {
+        simpleName = songFilePath; // Se não houver barra, usa o nome todo
+    }
+    // Remove a extensão .samba para um nome mais limpo
+    char cleanName[SONG_NAME_MAX_LEN];
+    strncpy(cleanName, simpleName, SONG_NAME_MAX_LEN - 1);
+    char* dot = strrchr(cleanName, '.');
+    if (dot) *dot = '\0'; // Coloca um terminador nulo onde estava o ponto
+    
+    FindOrCreateCurrentSongLeaderboard(cleanName);
 
     // Inicializa checkers
     s_gameState.checkers[0] = (Checker){SDLK_z, {CHECKER_Z_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
@@ -245,7 +248,7 @@ int Game_Init(SDL_Renderer* renderer) {
     // Inicia a música
     Mix_PlayMusic(s_gameState.faseAtual->musica, 0);
     s_gameState.musicStartTime = SDL_GetTicks();
-
+    
     s_gameState.debug = false;
     if (s_gameState.debug){
         const double pularParaSegundos = 275.0; 
@@ -479,10 +482,11 @@ void Game_HandleEvent(SDL_Event* e) {
                             s_gameState.needsRestart = true;
                             s_gameState.gameIsRunning = false; // Encerra o loop de jogo atual
                             break;
-                        case 1: // Voltar ao Menu (ainda não implementado)
-                            // Por enquanto, não faz nada
+                        case 1: 
+                            s_gameState.nextApplicationState = APP_STATE_MENU;
                             break;
                         case 2: // Sair
+                            s_gameState.nextApplicationState = APP_STATE_EXIT;
                             s_gameState.gameIsRunning = false; // Encerra o jogo
                             break;
                     }
@@ -490,10 +494,41 @@ void Game_HandleEvent(SDL_Event* e) {
             }
         }break;
 
-        // Lógica de Input para a Tela de Ranking Final (Botões)
+        case STATE_GAMEOVER: {
+            // Se o jogo acabou, só processamos inputs para os botões do menu
+            if (e->type == SDL_KEYDOWN && e->key.repeat == 0) {
+                SDL_Keycode key = e->key.keysym.sym;
+
+                if (key == SDLK_UP) {
+                    // Move a seleção para cima, com loop (2 -> 1 -> 0 -> 2 ...)
+                    s_gameState.selectedButtonIndex = (s_gameState.selectedButtonIndex - 1 + 3) % 3;
+                } else if (key == SDLK_DOWN) {
+                    // Move a seleção para baixo, com loop (0 -> 1 -> 2 -> 0 ...)
+                    s_gameState.selectedButtonIndex = (s_gameState.selectedButtonIndex + 1) % 3;
+                } else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
+                    // Ação ao pressionar Enter
+                    switch (s_gameState.selectedButtonIndex) {
+                        case 0: // Recomeçar
+                            s_gameState.needsRestart = true;  // Sinaliza para a main reiniciar
+                            s_gameState.gameIsRunning = false; // Encerra o loop da partida atual
+                            break;
+                        case 1: // Voltar ao Menu
+                            s_gameState.nextApplicationState = APP_STATE_MENU;
+                            s_gameState.needsRestart = false; // Não reinicia
+                            s_gameState.gameIsRunning = false; // Encerra o loop, main voltará ao menu
+                            break;
+                        case 2: // Sair
+                            s_gameState.nextApplicationState = APP_STATE_EXIT;
+                            s_gameState.needsRestart = false; // Não reinicia
+                            s_gameState.gameIsRunning = false; // Encerra o loop, main sairá do jogo
+                            break;
+                    }
+                }
+            }
+        } break; // Fim do case STATE_GAMEOVER
+
+        // Lógica de Input para a Tela de Ranking Final
         case STATE_RESULTS_ANIMATING:{}
-        case STATE_GAMEOVER:{break;}
-        // Nenhum input de jogo ativo aqui, apenas o ESC universal já tratado no topo
     }
 }
 
@@ -638,8 +673,12 @@ void Game_Update(float deltaTime) {
             if (s_gameState.health <= 0) {
                 s_gameState.gameFlowState = STATE_GAMEOVER;
                 Mix_HaltMusic();
-                if (s_gameState.failSound) Mix_PlayChannel(-1, s_gameState.failSound, 0);
+                if (s_gameState.failSound){
+                    Mix_PlayChannel(-1, s_gameState.failSound, 0);
+                }
+                s_gameState.selectedButtonIndex = 0; 
             }
+
             if(s_gameState.health < 0.0f) s_gameState.health = 0.0f;
 
         } break;
@@ -812,15 +851,24 @@ void Game_Render(SDL_Renderer* renderer) {
     rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
 
     // Mensagem de Game Over
-    if ((s_gameState.gameFlowState == STATE_GAMEOVER) && s_gameState.font) {
+    if (s_gameState.gameFlowState == STATE_GAMEOVER && s_gameState.font) {
+        // Fundo escuro
         boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 200);
-        SDL_Color red = {255, 0, 0, 255};
-        SDL_Surface* surfGO = TTF_RenderText_Blended(s_gameState.font, "FIM DE JOGO", red);
-        SDL_Texture* texGO = SDL_CreateTextureFromSurface(renderer, surfGO);
-        SDL_Rect dstGO = { SCREEN_WIDTH / 2 - surfGO->w / 2, SCREEN_HEIGHT / 2 - surfGO->h / 2, surfGO->w, surfGO->h };
-        SDL_RenderCopy(renderer, texGO, NULL, &dstGO);
-        SDL_FreeSurface(surfGO);
-        SDL_DestroyTexture(texGO);
+
+        // Título "FIM DE JOGO"
+        RenderText(renderer, s_gameState.font, "FIM DE JOGO", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 3, (SDL_Color){255, 0, 0, 255}, true);
+
+        // Lógica de renderização dos botões 
+        const char* buttonLabels[] = {"Recomecar", "Voltar ao Menu", "Sair"};
+        SDL_Color selectedColor = {255, 223, 0, 255}; // Dourado
+        SDL_Color normalColor = {255, 255, 255, 255};   // Branco
+
+        for (int i = 0; i < 3; ++i) {
+            // Define a cor baseada no botão selecionado
+            SDL_Color color = (i == s_gameState.selectedButtonIndex) ? selectedColor : normalColor;
+            // Desenha o texto do botão
+            RenderText(renderer, s_gameState.font, buttonLabels[i], SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2 + 50 + i * 60, color, true);
+        }
     }
 
     // Desenha a tela de PAUSE se o jogo estiver pausado 
@@ -855,16 +903,16 @@ void Game_Render(SDL_Renderer* renderer) {
         
         // Renderiza placar e precisão (comuns a todas as telas de resultado)
         sprintf(buffer, "%d", s_gameState.displayedScore);
-        RenderText(renderer, "Placar Final", SCREEN_WIDTH / 2, 100, white, true);
-        RenderText(renderer, buffer, SCREEN_WIDTH / 2, 150, gold, true);
+        RenderText(renderer, s_gameState.font,"Placar Final", SCREEN_WIDTH / 2, 100, white, true);
+        RenderText(renderer, s_gameState.font, buffer, SCREEN_WIDTH / 2, 150, gold, true);
         
         sprintf(buffer, "Precisao: %.2f%%", s_gameState.accuracy);
-        RenderText(renderer, buffer, SCREEN_WIDTH / 2, 200, white, true);
+        RenderText(renderer, s_gameState.font,  buffer, SCREEN_WIDTH / 2, 200, white, true);
 
         // Renderiza a tela de inserir nome
         if (s_gameState.gameFlowState == STATE_RESULTS_NAME_ENTRY) {
-            RenderText(renderer, "NOVO RECORDE!", SCREEN_WIDTH / 2, 300, gold, true);
-            RenderText(renderer, "Insira seu nome:", SCREEN_WIDTH / 2, 350, white, true);
+            RenderText(renderer, s_gameState.font, "NOVO RECORDE!", SCREEN_WIDTH / 2, 300, gold, true);
+            RenderText(renderer, s_gameState.font, "Insira seu nome:", SCREEN_WIDTH / 2, 350, white, true);
 
             // Desenha as 3 letras
             for (int i = 0; i < 3; ++i) {
@@ -878,7 +926,7 @@ void Game_Render(SDL_Renderer* renderer) {
                 }
 
                 if (showChar) {
-                    RenderText(renderer, letterStr, x_pos, 420, white, true);
+                    RenderText(renderer, s_gameState.font, letterStr, x_pos, 420, white, true);
                 }
                 // Desenha um sublinhado
                 boxRGBA(renderer, x_pos - 20, 450, x_pos + 20, 452, 255, 255, 255, 255);
@@ -887,21 +935,21 @@ void Game_Render(SDL_Renderer* renderer) {
         // Renderiza a tela de ranking final 
         else if (s_gameState.gameFlowState == STATE_RESULTS_LEADERBOARD) {
             const char* title = (s_gameState.newHighscoreRank != -1) ? "Parabens!" : "Ranking da Musica";
-            RenderText(renderer, title, SCREEN_WIDTH / 2, 60, gold, true);
+            RenderText(renderer, s_gameState.font, title, SCREEN_WIDTH / 2, 60, gold, true);
 
             // Desenha o ranking em 2 colunas
             for (int i = 0; i < 5; ++i) {
                 // Coluna 1 (1-5)
                 sprintf(buffer, "%2d. %s", i + 1, s_gameState.currentSongLeaderboard->scores[i].name);
-                RenderText(renderer, buffer, SCREEN_WIDTH / 4, 280 + i * 40, white, false);
+                RenderText(renderer, s_gameState.font, buffer, SCREEN_WIDTH / 4, 280 + i * 40, white, false);
                 sprintf(buffer, "%d", s_gameState.currentSongLeaderboard->scores[i].score);
-                RenderText(renderer, buffer, SCREEN_WIDTH / 4 + 200, 280 + i * 40, white, false);
+                RenderText(renderer, s_gameState.font, buffer, SCREEN_WIDTH / 4 + 200, 280 + i * 40, white, false);
 
                 // Coluna 2 (6-10)
                 sprintf(buffer, "%2d. %s", i + 6, s_gameState.currentSongLeaderboard->scores[i+5].name);
-                RenderText(renderer, buffer, SCREEN_WIDTH / 2 + 100, 280 + i * 40, white, false);
+                RenderText(renderer, s_gameState.font, buffer, SCREEN_WIDTH / 2 + 100, 280 + i * 40, white, false);
                 sprintf(buffer, "%d", s_gameState.currentSongLeaderboard->scores[i+5].score);
-                RenderText(renderer, buffer, SCREEN_WIDTH / 2 + 300, 280 + i * 40, white, false);
+                RenderText(renderer, s_gameState.font, buffer, SCREEN_WIDTH / 2 + 300, 280 + i * 40, white, false);
             }
 
             // Desenha os botões com feedback de seleção
@@ -911,12 +959,56 @@ void Game_Render(SDL_Renderer* renderer) {
 
             for (int i = 0; i < 3; ++i) {
                 SDL_Color color = (i == s_gameState.selectedButtonIndex) ? selectedColor : normalColor;
-                RenderText(renderer, buttonLabels[i], SCREEN_WIDTH / 2, 550 + i * 50, color, true);
+                RenderText(renderer, s_gameState.font, buttonLabels[i], SCREEN_WIDTH / 2, 550 + i * 50, color, true);
             }
         }
     }
 
     SDL_RenderPresent(renderer);
+}
+
+ApplicationState Game_Run(SDL_Renderer* renderer, const char* songFilePath) {
+    bool restart = false;
+    do {
+        restart = false;
+        
+        if (!Game_Init(renderer, songFilePath)) {
+            return APP_STATE_MENU; // Se a inicialização falhar, volta para o menu
+        }
+
+        Uint32 lastFrameTime = SDL_GetTicks();
+
+        // Loop Principal de Uma Partida
+        while (Game_IsRunning()) {
+            // Lida com eventos
+            SDL_Event e;
+            while (SDL_PollEvent(&e) != 0) {
+                Game_HandleEvent(&e);
+            }
+
+            // Calcula o delta time
+            Uint32 currentFrameTime = SDL_GetTicks();
+            float deltaTime = (currentFrameTime - lastFrameTime) / 1000.0f;
+            lastFrameTime = currentFrameTime;
+
+            // Garante que o deltaTime não seja absurdamente grande
+            if (deltaTime > 0.1f) deltaTime = 0.1f;
+
+            // Atualiza e renderiza o jogo
+            Game_Update(deltaTime);
+            Game_Render(renderer);
+        }
+
+        // Checa se o jogo pediu para reiniciar
+        restart = Game_NeedsRestart();
+        
+        // Limpa todos os recursos da partida que acabou
+        Game_Shutdown();
+
+    } while (restart);
+
+    // Por padrão, ao sair do loop, volta para o menu
+    return s_gameState.nextApplicationState;
 }
 
 // Função para gerenciar o cache de texturas
@@ -1064,30 +1156,6 @@ static void SpawnFeedbackText(int type, SDL_Rect checkerRect) {
             break; // Sai do loop após encontrar um espaço
         }
     }
-}
-
-static void RenderText(SDL_Renderer* renderer, const char* text, int x, int y, SDL_Color color, bool center) {
-    if (!s_gameState.font || !text) return;
-
-    SDL_Surface* surface = TTF_RenderText_Blended(s_gameState.font, text, color);
-    if (!surface) return;
-
-    SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer, surface);
-    if (!texture) {
-        SDL_FreeSurface(surface);
-        return;
-    }
-
-    SDL_Rect destRect = { x, y, surface->w, surface->h };
-    if (center) {
-        destRect.x = x - surface->w / 2;
-        destRect.y = y - surface->h / 2;
-    }
-
-    SDL_RenderCopy(renderer, texture, NULL, &destRect);
-
-    SDL_FreeSurface(surface);
-    SDL_DestroyTexture(texture);
 }
 
 void Game_Shutdown() {

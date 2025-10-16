@@ -7,6 +7,8 @@
 #include "defs.h"
 #include "game.h"
 #include "auxFuncs/auxWaitEvent.h"
+#include "app.h"
+#include "menu.h" 
 
 // Inicializa todos os subsistemas da SDL de uma só vez.
 // Retorna 'true' em caso de sucesso, 'false' em caso de falha.
@@ -72,43 +74,21 @@ int main(int argc, char* argv[]) {
     }
 
     // Inicia o loop principal do jogo, que lida com o reinício.
-    bool restart = false;
-    do {
-        restart = false;
+    // Loop principal da APLICAÇÃO
 
-        if (!Game_Init(renderer)) {
-            printf("ERRO CRITICO: Falha ao inicializar a logica do jogo!\n");
-            break; 
+    ApplicationState currentState = APP_STATE_MENU;
+    char selectedSongPath[256] = {0}; // Para guardar a música que o menu escolheu
+
+    while (currentState != APP_STATE_EXIT) {
+        if (currentState == APP_STATE_MENU) {
+            // Roda o módulo de menu e espera ele decidir o próximo estado
+            currentState = Menu_Run(renderer, selectedSongPath); 
+        } 
+        else if (currentState == APP_STATE_GAMEPLAY) {
+            // Roda o módulo de jogo com a música escolhida
+            currentState = Game_Run(renderer, selectedSongPath);
         }
-        
-        Uint32 lastFrameTime = SDL_GetTicks();
-
-        // Loop de uma única partida
-        while (Game_IsRunning()) {
-            SDL_Event e;
-            Uint32 timeout = 16;
-            while (AUX_WaitEventTimeout(&e, &timeout ) != 0) {
-                Game_HandleEvent(&e);
-            }
-
-            Uint32 currentFrameTime = SDL_GetTicks();
-            float deltaTime = (currentFrameTime - lastFrameTime) / 1000.0f;
-            lastFrameTime = currentFrameTime;
-            
-            // Garante que o deltaTime não seja absurdamente grande se o jogo congelar (ex: ao arrastar a janela)
-            if (deltaTime > 0.1f) {
-                deltaTime = 0.1f;
-            }
-
-            Game_Update(deltaTime);
-            Game_Render(renderer);
-        }
-
-        restart = Game_NeedsRestart();
-        
-        Game_Shutdown();
-
-    } while (restart);
+    }
 
     // Encerramento final de tudo.
     SDL_DestroyRenderer(renderer);

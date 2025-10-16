@@ -18,6 +18,8 @@ SRC = src/game.c \
       src/note.c \
       src/stage.c \
       src/auxFuncs/auxWaitEvent.c \
+	  src/menu.c \
+	  src/auxFuncs/utils.c \
 
 OBJ = $(SRC:.c=.o)
 
