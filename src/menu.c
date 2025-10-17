@@ -33,18 +33,43 @@ static int s_songCount = 0;
 
 // Carrega a lista de músicas e seus recordes
 static void Menu_LoadSongs() {
-    // NOTA: Ler diretórios em C pode ser complexo e dependente de plataforma.
-    // Para simplificar, lista de músicas ficará hardcoded por enquanto.
+    // 1. Carrega a base de dados de todos os recordes do arquivo
+    LeaderboardData leaderboardData;
+    Leaderboard_Load(&leaderboardData);
     
-    strcpy(s_songList[0].fileName, "assets/beatMaps/meu_lugar.samba");
-    strcpy(s_songList[0].displayName, "Meu Lugar");
+    // 2. Define a lista de músicas do jogo. O primeiro nome é o "ID" para o ranking E para o nome do arquivo.
+    const char* song_database[][2] = {
+        {"meu_lugar", "Meu Lugar"},
+        {"do_fundo_do_nosso_quintal", "Do Fundo do Nosso Quintal"} 
+    };
+    s_songCount = sizeof(song_database) / sizeof(song_database[0]);
+    // 3. Itera sobre a lista de músicas do jogo para preencher a s_songList
+    for (int i = 0; i < s_songCount; ++i) {
+        // Pega o nome de exibição da nossa base de dados
+        strcpy(s_songList[i].displayName, song_database[i][1]);
 
-    strcpy(s_songList[1].fileName, "assets/beatMaps/do_fundo_do_nosso_quintal.samba");
-    strcpy(s_songList[1].displayName, "Do Fundo do Nosso Quintal");
-    
-    s_songCount = 2;
+        // Gera o caminho completo do arquivo a partir do ID
+        sprintf(s_songList[i].fileName, "assets/beatMaps/%s.samba", song_database[i][0]);
+
+        // Procura o recorde para esta música usando o ID
+        bool foundRecord = false;
+        for (int j = 0; j < leaderboardData.songCount; ++j) {
+            // Compara o ID da música com o nome salvo no leaderboard
+            if (strcmp(leaderboardData.songLeaderboards[j].songName, song_database[i][0]) == 0) {
+                 // Encontrou! Copia o recorde (nome e pontuação)
+                 s_songList[i].topScore = leaderboardData.songLeaderboards[j].scores[0];
+                 foundRecord = true;
+                 break; // Para de procurar, pois já achou a música
+            }
+        }
+
+        // Se, após o loop, não encontrou um recorde para a música, define os valores padrão
+        if (!foundRecord) {
+            strcpy(s_songList[i].topScore.name, "---");
+            s_songList[i].topScore.score = 0;
+        }
+    }
 }
-
 // Inicializa os recursos do menu
 static bool Menu_Init(SDL_Renderer* renderer) {
     s_background = IMG_LoadTexture(renderer, "assets/image/menuBG.png");
@@ -111,11 +136,29 @@ static void Menu_Render(SDL_Renderer* renderer) {
             RenderText(renderer, s_font, buttons[i], SCREEN_WIDTH / 2, 300 + i * 80, color, true);
         }
     } else if (s_currentScreen == MENU_SCREEN_SONG_SELECT) {
-        RenderText(renderer, s_font, "Escolha uma Musica", SCREEN_WIDTH / 2, 100, gold, true);
+        RenderText(renderer, s_font, "Escolha uma Musica", SCREEN_WIDTH / 2, 100, gold, TEXT_ALIGN_CENTER);
+
+        // --- Lógica de Renderização da Lista de Músicas com Recordes ---
+        int listStartY = 250;     // Posição Y inicial da lista
+        int listLineHeight = 60;  // Espaçamento entre as músicas
+        int nameX = 150;          // Posição X para o nome da música (alinhado à esquerda)
+        int scoreX = SCREEN_WIDTH - 150; // Posição X para o recorde (alinhado à direita)
+
         for (int i = 0; i < s_songCount; ++i) {
             SDL_Color color = (s_selectedButton == i) ? gold : white;
-            RenderText(renderer, s_font, s_songList[i].displayName, SCREEN_WIDTH / 2, 250 + i * 60, color, true);
-            // Aqui você renderizaria o recorde (s_songList[i].topScore) ao lado
+            int y_pos = listStartY + i * listLineHeight;
+
+            // 1. Desenha o nome da música, alinhado à ESQUERDA
+            RenderText(renderer, s_font, s_songList[i].displayName, nameX, y_pos, color, TEXT_ALIGN_LEFT);
+
+            // 2. Desenha o recorde, alinhado à DIREITA
+            char recordBuffer[128];
+            if (s_songList[i].topScore.score > 0) {
+                sprintf(recordBuffer, "%s - %d", s_songList[i].topScore.name, s_songList[i].topScore.score);
+            } else {
+                sprintf(recordBuffer, "Sem recorde");
+            }
+            RenderText(renderer, s_font, recordBuffer, scoreX, y_pos, color, TEXT_ALIGN_RIGHT);
         }
     }
     

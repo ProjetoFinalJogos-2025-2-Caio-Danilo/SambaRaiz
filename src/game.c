@@ -118,8 +118,6 @@ static GameState s_gameState;
 static LeaderboardData s_leaderboardData;
 
 // Protótipos de Funções Estáticas
-static void SaveLeaderboard();
-static void LoadLeaderboard();
 static void FindOrCreateCurrentSongLeaderboard(const char* songName);
 static void SpawnConfettiParticle();
 static void SpawnFeedbackText(int type, SDL_Rect checkerRect);
@@ -149,12 +147,6 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
 
     // Inicializa o gerador de números aleatórios
     srand(time(NULL));
-    
-    // Inicializa TTF
-    if (TTF_Init() == -1) {
-        printf("Erro ao inicializar SDL2_ttf: %s\n", TTF_GetError());
-        return 0;
-    }
 
     // Alocação dinâmica para partículas e textos
     s_gameState.confetti = calloc(MAX_CONFETTI, sizeof(ConfettiParticle));
@@ -195,7 +187,7 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
 
 
     // Encontra o leaderboard específico para esta música
-    LoadLeaderboard();
+    Leaderboard_Load(&s_leaderboardData);
 
     // Use uma parte do nome do arquivo para o leaderboard
     const char* simpleName = strrchr(songFilePath, '/');
@@ -457,7 +449,7 @@ void Game_HandleEvent(SDL_Event* e) {
                         }
                         strcpy(s_gameState.currentSongLeaderboard->scores[s_gameState.newHighscoreRank].name, s_gameState.currentName);
                         s_gameState.currentSongLeaderboard->scores[s_gameState.newHighscoreRank].score = s_gameState.finalScore;
-                        SaveLeaderboard();
+                        Leaderboard_Save(&s_leaderboardData);
                     }
                     s_gameState.gameFlowState = STATE_RESULTS_LEADERBOARD;
                 }
@@ -484,6 +476,8 @@ void Game_HandleEvent(SDL_Event* e) {
                             break;
                         case 1: 
                             s_gameState.nextApplicationState = APP_STATE_MENU;
+                            s_gameState.needsRestart = false; // Não reinicia
+                            s_gameState.gameIsRunning = false; // Encerra o jogo
                             break;
                         case 2: // Sair
                             s_gameState.nextApplicationState = APP_STATE_EXIT;
@@ -918,6 +912,7 @@ void Game_Render(SDL_Renderer* renderer) {
             for (int i = 0; i < 3; ++i) {
                 char letterStr[2] = {s_gameState.currentName[i], '\0'};
                 int x_pos = SCREEN_WIDTH / 2 + (i - 1) * 60; // Espaçamento
+                int y_pos = 420;
                 
                 // Pisca a letra selecionada
                 bool showChar = true;
@@ -929,7 +924,8 @@ void Game_Render(SDL_Renderer* renderer) {
                     RenderText(renderer, s_gameState.font, letterStr, x_pos, 420, white, true);
                 }
                 // Desenha um sublinhado
-                boxRGBA(renderer, x_pos - 20, 450, x_pos + 20, 452, 255, 255, 255, 255);
+                int underline_y = y_pos + 55; 
+                boxRGBA(renderer, x_pos - 25, underline_y, x_pos + 25, underline_y + 2, 255, 255, 255, 255);
             }
         }
         // Renderiza a tela de ranking final 
@@ -953,7 +949,7 @@ void Game_Render(SDL_Renderer* renderer) {
             }
 
             // Desenha os botões com feedback de seleção
-           const char* buttonLabels[] = {"Jogar Novamente", "Voltar ao Menu", "Sair"};
+            const char* buttonLabels[] = {"Jogar Novamente", "Voltar ao Menu", "Sair"};
             SDL_Color selectedColor = {255, 223, 0, 255}; // Dourado
             SDL_Color normalColor = {255, 255, 255, 255};   // Branco
 
@@ -1099,26 +1095,6 @@ static void FindOrCreateCurrentSongLeaderboard(const char* songName) {
     }
 }
 
-// Tenta carregar o placar de líderes de um arquivo. Se não existir, cria um zerado.
-static void LoadLeaderboard() {
-    FILE* file = fopen("leaderboards.dat", "rb");
-    if (file) {
-        fread(&s_leaderboardData, sizeof(LeaderboardData), 1, file);
-        fclose(file);
-    } else {
-        // Se o arquivo não existe, apenas zera a contagem
-        s_leaderboardData.songCount = 0;
-    }
-}
-
-static void SaveLeaderboard() {
-    FILE* file = fopen("leaderboards.dat", "wb");
-    if (file) {
-        fwrite(&s_leaderboardData, sizeof(LeaderboardData), 1, file);
-        fclose(file);
-    }
-}
-
 static void SpawnFeedbackText(int type, SDL_Rect checkerRect) {
     for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
         if (!s_gameState.feedbackTexts[i].isActive) {
@@ -1186,11 +1162,6 @@ void Game_Shutdown() {
     // Libera a memória alocada com calloc
     free(s_gameState.confetti);
     free(s_gameState.feedbackTexts);
-    
-    if (s_gameState.font) {
-        TTF_CloseFont(s_gameState.font);
-    }
-    TTF_Quit();
 }
 
 bool Game_NeedsRestart() {
