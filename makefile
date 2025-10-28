@@ -7,7 +7,7 @@ SDL_PACKAGES = sdl2 SDL2_gfx SDL2_image SDL2_mixer SDL2_ttf
 # Flags de Compilação (-I) e Linker (-L, -l) obtidas automaticamente
 # -Wall habilita todos os avisos importantes
 CFLAGS = -Wall $(shell pkg-config --cflags $(SDL_PACKAGES))
-LDFLAGS = $(shell pkg-config --libs $(SDL_PACKAGES)) -lSDL2main
+LDFLAGS = $(shell pkg-config --libs $(SDL_PACKAGES)) -lSDL2main -lm
 
 # Diretório onde o executável final será colocado
 TARGET_DIR = output
