@@ -232,7 +232,7 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
         SDL_Log("Falha ao carregar background '%s': %s", BG_PATH, IMG_GetError());
     }
 
-    // Sprite do pandeirista (8 frames lado a lado)
+    // Sprite do pandeirista 
     g_pandeirista.tex = IMG_LoadTexture(renderer, PANDEIRISTA_PATH);
     if (!g_pandeirista.tex) {
         SDL_Log("Falha ao carregar sprite do pandeirista: %s", IMG_GetError());
@@ -245,12 +245,12 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
         g_pandeirista.current = 0;
         g_pandeirista.fps     = PANDEIRISTA_FPS;
         g_pandeirista.timer   = 0.0f;
-        g_pandeirista.scale   = 0.6f; // tamanho agradável na rua
+        g_pandeirista.scale   = 0.6f; 
 
         float w = g_pandeirista.frameW * g_pandeirista.scale;
         float h = g_pandeirista.frameH * g_pandeirista.scale;
 
-        // Centraliza e aplica offsets (ajuste pedido)
+        // Centraliza e aplica offsets 
         g_pandeirista.pos.x = (SCREEN_WIDTH - w) * 0.5f + PAN_X_OFFSET;
         g_pandeirista.pos.y = STREET_LINE_Y - h + PAN_Y_OFFSET; // pés ancorados na rua
     }
@@ -681,7 +681,7 @@ void Game_Render(SDL_Renderer* renderer) {
         }
     }
 
-    /* 4) PANDEIRISTA — por CIMA dos contornos (pedido) */
+    /* 4) PANDEIRISTA */
     if (g_pandeirista.tex) {
         SDL_Rect src = {
             g_pandeirista.current * g_pandeirista.frameW, 0,
@@ -760,7 +760,7 @@ void Game_Render(SDL_Renderer* renderer) {
     if (currentSpecialWidth > 0) boxRGBA(renderer, specialBarX, specialBarY, specialBarX + currentSpecialWidth, specialBarY + specialBarHeight, specialColor.r, specialColor.g, specialColor.b, 255);
     rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
 
-    /* 10) Overlays de pausa/resultados/game over (inalterados) */
+    /* 10) Overlays de pausa/resultados/game over */
     if (s_gameState.gameFlowState == STATE_GAMEOVER && s_gameState.font) {
         boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 200);
         RenderText(renderer, s_gameState.font, "FIM DE JOGO", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 3, (SDL_Color){255, 0, 0, 255}, true);
