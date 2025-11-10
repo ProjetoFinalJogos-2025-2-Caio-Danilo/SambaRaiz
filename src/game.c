@@ -1,3 +1,4 @@
+// game.c
 #include "game.h"
 #include "defs.h"
 #include "stage.h"
@@ -5,50 +6,71 @@
 #include "leaderboard.h"
 #include "app.h"
 #include "auxFuncs/utils.h"
+
 #include <stdio.h>
 #include <time.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <math.h>
+
 #include <SDL2/SDL2_gfxPrimitives.h>
 #include <SDL2/SDL_ttf.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_mixer.h>
 
 /* =========================
-   Pandeirista (sprite animada)
+   Caminhos e constantes visuais
    ========================= */
-#define PANDEIRISTA_PATH "assets/image/parallax/projeto danilo-Sheet.png"
-#define PANDEIRISTA_FRAMES 8           /* 8 frames horizontais */
-#define PANDEIRISTA_FPS    6.0f
-#define PANDEIRISTA_SCALE  0.60f
-#define PANDE_OFFSET_X    (-120.0f)    /* “um pouco à esquerda” */
-#define PANDE_OFFSET_Y      (0.0f)
+#define BG_PATH                "assets/image/parallax/City2.png"
 
-/* Idle deve ficar no ÚLTIMO frame da sheet */
-#define PANDE_IDLE_FRAME (PANDEIRISTA_FRAMES - 1)
+#define PANDEIRISTA_PATH       "assets/image/parallax/projeto danilo-Sheet.png"
+#define PANDEIRISTA_FRAMES     8
+#define PANDEIRISTA_FPS        6.0f
+#define PANDEIRISTA_SCALE      0.40f
+#define PAN_X_OFFSET           (-200.0f)   // posição base levemente à esquerda
+#define PAN_Y_OFFSET           (-15.0f)
 
-/* Linha da rua: base alinhada pela borda superior da pista */
-#define STREET_LINE_Y   (RHYTHM_TRACK_POS_Y - 64)
+#define VELHO_PATH             "assets/image/parallax/velho mesa-Sheet.png"
+#define VELHO_FRAMES           4
+#define VELHO_FPS              4.0f
+#define VELHO_SCALE            0.30f
+#define VELHO_FACE_LEFT        1          // 1 = espelha horizontalmente
+#define VELHO_OFFSET_X         (-60.0f)  // solicitado
+#define VELHO_OFFSET_Y         (-60.0f)   // solicitado
 
-typedef enum { PANDE_IDLE = 0, PANDE_PLAY = 1 } PandeState;
-
-typedef struct {
-    SDL_Texture* tex;
-    int frameW, frameH, frames, current;
-    float fps, timer, scale;
-    SDL_FPoint pos;
-    PandeState state;
-} AnimatedSprite;
-
-static AnimatedSprite g_pandeirista = {0};
+// Linha de referência "chão" da rua (ancora os pés dos personagens)
+#define STREET_LINE_Y          (RHYTHM_TRACK_POS_Y - 64)
 
 /* =========================
-   BACKGROUND (City2.png)
+   Estruturas de apoio
    ========================= */
-#define BG_PATH "assets/image/parallax/City2.png"
-static SDL_Texture* g_bgCity = NULL;
+typedef struct {
+    SDL_Texture* tex;
+    int   frameW, frameH;
+    int   frames, current;
+    float fps, timer, scale;
+    SDL_FPoint pos; // canto superior-esquerdo do destino após escala
+} AnimatedSprite;
 
+typedef enum {
+    PAN_STATE_IDLE = 0,
+    PAN_STATE_PLAY = 1
+} PandeiristaState;
+
+/* =========================
+   Estado global de sprites
+   ========================= */
+static SDL_Texture*    g_bgCity       = NULL;
+
+static AnimatedSprite  g_pandeirista  = {0};
+static PandeiristaState g_panState    = PAN_STATE_IDLE;
+static bool            g_panStarted   = false; // trava de "primeiro contato"
+
+static AnimatedSprite  g_velhoMesa    = {0};
+
+/* =========================
+   Funções auxiliares de render
+   ========================= */
 static void DrawCityBackground(SDL_Renderer* r) {
     if (!g_bgCity) return;
 
@@ -56,19 +78,66 @@ static void DrawCityBackground(SDL_Renderer* r) {
     SDL_QueryTexture(g_bgCity, NULL, NULL, &tw, &th);
     if (tw <= 0 || th <= 0) return;
 
+    // Preenche largura total sem bordas pretas
     float scaleW = (float)SCREEN_WIDTH / (float)tw;
     int dstW = SCREEN_WIDTH;
     int dstH = (int)(th * scaleW);
 
+    // Ancorar base do BG na borda da pista
     int dstX = 0;
-    int dstY = RHYTHM_TRACK_POS_Y - dstH; /* ancora base do BG na “rua” */
+    int dstY = RHYTHM_TRACK_POS_Y - dstH;
 
     SDL_Rect dst = { dstX, dstY, dstW, dstH };
     SDL_RenderCopy(r, g_bgCity, NULL, &dst);
 }
 
+static void DrawPandeirista(SDL_Renderer* r) {
+    if (!g_pandeirista.tex) return;
+
+    // Se estiver ocioso, travar no último frame (pedido do usuário)
+    if (g_panState == PAN_STATE_IDLE) {
+        g_pandeirista.current = g_pandeirista.frames - 1;
+    }
+
+    SDL_Rect src = {
+        g_pandeirista.current * g_pandeirista.frameW,
+        0,
+        g_pandeirista.frameW,
+        g_pandeirista.frameH
+    };
+
+    int w = (int)(g_pandeirista.frameW * g_pandeirista.scale);
+    int h = (int)(g_pandeirista.frameH * g_pandeirista.scale);
+
+    SDL_Rect dst = { (int)g_pandeirista.pos.x, (int)g_pandeirista.pos.y, w, h };
+    SDL_RenderCopy(r, g_pandeirista.tex, &src, &dst);
+}
+
+static void DrawVelhoMesa(SDL_Renderer* r) {
+    if (!g_velhoMesa.tex) return;
+
+    SDL_Rect src = {
+        g_velhoMesa.current * g_velhoMesa.frameW,
+        0,
+        g_velhoMesa.frameW,
+        g_velhoMesa.frameH
+    };
+
+    int w = (int)(g_velhoMesa.frameW * g_velhoMesa.scale);
+    int h = (int)(g_velhoMesa.frameH * g_velhoMesa.scale);
+
+    SDL_Rect dst = {
+        (int)(g_velhoMesa.pos.x + VELHO_OFFSET_X),
+        (int)(g_velhoMesa.pos.y + VELHO_OFFSET_Y),
+        w, h
+    };
+
+    SDL_RendererFlip flip = VELHO_FACE_LEFT ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
+    SDL_RenderCopyEx(r, g_velhoMesa.tex, &src, &dst, 0.0, NULL, flip);
+}
+
 /* =========================
-   Jogo
+   (Restante do estado do jogo)
    ========================= */
 #define MAX_CONFETTI 200
 #define SPECIAL_DURATION 10.0f
@@ -105,7 +174,7 @@ typedef struct {
 
 typedef struct {
     bool isActive;
-    int type; /* 0: Otimo, 1: Bom, 2: Ok */
+    int type; // 0: Otimo, 1: Bom, 2: Ok
     SDL_FRect pos;
     float lifetime;
 } FeedbackText;
@@ -129,7 +198,7 @@ typedef struct {
     float specialMeter;
     bool isSpecialActive;
     float specialTimer;
-    
+
     ConfettiParticle* confetti;
     FeedbackText* feedbackTexts;
 
@@ -137,37 +206,34 @@ typedef struct {
     Uint32 musicStartTime;
     Uint32 pauseStartTime;
 
-    /* Cache UI */
     CachedTexture scoreTexture;
     CachedTexture comboTexture;
     SDL_Texture* feedbackTextures[3];
     int cachedScore;
     int cachedCombo;
 
-    /* Resultados */
-    int finalScore;
-    int displayedScore;
-    int notesHit;
+    int   finalScore;
+    int   displayedScore;
+    int   notesHit;
     float accuracy;
-    int newHighscoreRank;
+    int   newHighscoreRank;
     SongLeaderboard* currentSongLeaderboard;
-    char currentName[4];
-    int nameEntryCharIndex;
-    int selectedButtonIndex;
-    bool needsRestart;
+    char  currentName[4];
+    int   nameEntryCharIndex;
+    int   selectedButtonIndex;
+    bool  needsRestart;
 
     ApplicationState nextApplicationState;
 
     bool debug;
-
-    /* Disparo de início do pandeirista */
-    bool pandeHasStarted;
 } GameState;
 
 static GameState s_gameState;
 static LeaderboardData s_leaderboardData;
 
-/* Protótipos */
+/* =========================
+   Protótipos
+   ========================= */
 static void FindOrCreateCurrentSongLeaderboard(const char* songName);
 static void SpawnConfettiParticle();
 static void SpawnFeedbackText(int type, SDL_Rect checkerRect);
@@ -179,28 +245,30 @@ static void UpdateTextureCache(SDL_Renderer* renderer);
 int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
     memset(&s_gameState, 0, sizeof(GameState));
 
-    s_gameState.health = 100.0f;
-    s_gameState.gameIsRunning = true;
-    s_gameState.needsRestart = false;
-    s_gameState.gameFlowState = STATE_PLAYING;
-    s_gameState.notesHit = 0;
-    s_gameState.cachedScore = -1; 
-    s_gameState.cachedCombo = -1;
-    s_gameState.specialMeter = 0.0f;
-    s_gameState.isSpecialActive = false;
-    s_gameState.specialTimer = 0.0f;
+    s_gameState.health           = 100.0f;
+    s_gameState.gameIsRunning    = true;
+    s_gameState.needsRestart     = false;
+    s_gameState.gameFlowState    = STATE_PLAYING;
+    s_gameState.notesHit         = 0;
+
+    s_gameState.cachedScore      = -1;
+    s_gameState.cachedCombo      = -1;
+
+    s_gameState.specialMeter     = 0.0f;
+    s_gameState.isSpecialActive  = false;
+    s_gameState.specialTimer     = 0.0f;
+
     s_gameState.nextApplicationState = APP_STATE_MENU;
-    s_gameState.pandeHasStarted = false;
 
     srand((unsigned)time(NULL));
 
-    s_gameState.confetti = (ConfettiParticle*)calloc(MAX_CONFETTI, sizeof(ConfettiParticle));
+    s_gameState.confetti      = (ConfettiParticle*)calloc(MAX_CONFETTI, sizeof(ConfettiParticle));
     s_gameState.feedbackTexts = (FeedbackText*)calloc(MAX_FEEDBACK_TEXTS, sizeof(FeedbackText));
     if (!s_gameState.confetti || !s_gameState.feedbackTexts) {
         printf("Erro ao alocar memoria para particulas/feedback!\n");
         return 0;
     }
-    
+
     s_gameState.failSound = Mix_LoadWAV("assets/sound/failBoo.mp3");
     if (!s_gameState.failSound) {
         printf("Aviso: Nao foi possivel carregar o som de gameOver: %s\n", Mix_GetError());
@@ -223,34 +291,54 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
     s_gameState.faseAtual = Fase_CarregarDeArquivo(renderer, songFilePath);
     if (!s_gameState.faseAtual) return 0;
 
-    /* Carrega BG estático */
+    // Background único
     g_bgCity = IMG_LoadTexture(renderer, BG_PATH);
     if (!g_bgCity) {
         SDL_Log("Falha ao carregar background '%s': %s", BG_PATH, IMG_GetError());
     }
 
-    /* Pandeirista */
+    // Pandeirista
     g_pandeirista.tex = IMG_LoadTexture(renderer, PANDEIRISTA_PATH);
     if (!g_pandeirista.tex) {
         SDL_Log("Falha ao carregar sprite do pandeirista: %s", IMG_GetError());
     } else {
-        int texW = 0, texH = 0;
-        SDL_QueryTexture(g_pandeirista.tex, NULL, NULL, &texW, &texH);
+        int tw, th; SDL_QueryTexture(g_pandeirista.tex, NULL, NULL, &tw, &th);
         g_pandeirista.frames  = PANDEIRISTA_FRAMES;
-        g_pandeirista.frameW  = texW / PANDEIRISTA_FRAMES;
-        g_pandeirista.frameH  = texH;
-        g_pandeirista.current = PANDE_IDLE_FRAME;  /* idle no último frame */
+        g_pandeirista.frameW  = tw / PANDEIRISTA_FRAMES;
+        g_pandeirista.frameH  = th;
+        g_pandeirista.current = PANDEIRISTA_FRAMES - 1; // idle no último frame
         g_pandeirista.fps     = PANDEIRISTA_FPS;
         g_pandeirista.timer   = 0.0f;
         g_pandeirista.scale   = PANDEIRISTA_SCALE;
-        g_pandeirista.state   = PANDE_IDLE;
 
         float w = g_pandeirista.frameW * g_pandeirista.scale;
         float h = g_pandeirista.frameH * g_pandeirista.scale;
+        g_pandeirista.pos.x = (SCREEN_WIDTH - w) * 0.5f + PAN_X_OFFSET;
+        g_pandeirista.pos.y = STREET_LINE_Y - h + PAN_Y_OFFSET;
 
-        /* Centralizado, com leve deslocamento à esquerda, pés na rua */
-        g_pandeirista.pos.x = (SCREEN_WIDTH - w) * 0.5f + PANDE_OFFSET_X;
-        g_pandeirista.pos.y = STREET_LINE_Y - h + PANDE_OFFSET_Y;
+        g_panState   = PAN_STATE_IDLE;
+        g_panStarted = false;
+    }
+
+    // Velho na mesa
+    g_velhoMesa.tex = IMG_LoadTexture(renderer, VELHO_PATH);
+    if (!g_velhoMesa.tex) {
+        SDL_Log("Falha ao carregar sprite do velho: %s", IMG_GetError());
+    } else {
+        int tw, th; SDL_QueryTexture(g_velhoMesa.tex, NULL, NULL, &tw, &th);
+        g_velhoMesa.frames  = VELHO_FRAMES;
+        g_velhoMesa.frameW  = tw / VELHO_FRAMES;
+        g_velhoMesa.frameH  = th;
+        g_velhoMesa.current = 0;
+        g_velhoMesa.fps     = VELHO_FPS;
+        g_velhoMesa.timer   = 0.0f;
+        g_velhoMesa.scale   = VELHO_SCALE;
+
+        float w = g_velhoMesa.frameW * g_velhoMesa.scale;
+        float h = g_velhoMesa.frameH * g_velhoMesa.scale;
+        // base = centro; offsets serão aplicados na hora do draw
+        g_velhoMesa.pos.x = (SCREEN_WIDTH - w) * 0.5f;
+        g_velhoMesa.pos.y = STREET_LINE_Y - h;
     }
 
     Leaderboard_Load(&s_leaderboardData);
@@ -263,13 +351,13 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
     cleanName[SONG_NAME_MAX_LEN - 1] = '\0';
     char* dot = strrchr(cleanName, '.');
     if (dot) *dot = '\0';
-    
+
     FindOrCreateCurrentSongLeaderboard(cleanName);
 
     s_gameState.checkers[0] = (Checker){SDLK_z, (SDL_Rect){CHECKER_Z_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
     s_gameState.checkers[1] = (Checker){SDLK_x, (SDL_Rect){CHECKER_X_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
     s_gameState.checkers[2] = (Checker){SDLK_c, (SDL_Rect){CHECKER_C_X, CHECKER_Y, NOTE_WIDTH, NOTE_HEIGHT}, 0.0f};
-    
+
     s_gameState.font = TTF_OpenFont("assets/font/pixelFont.ttf", 48);
     if (!s_gameState.font) {
         printf("Erro ao abrir fonte: %s\n", TTF_GetError());
@@ -295,13 +383,13 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
     SDL_Surface* surfOk = TTF_RenderText_Blended(s_gameState.font, "Ok", (SDL_Color){192, 192, 192, 255});
     s_gameState.feedbackTextures[2] = SDL_CreateTextureFromSurface(renderer, surfOk);
     SDL_FreeSurface(surfOk);
-    
+
     Mix_PlayMusic(s_gameState.faseAtual->musica, 0);
     s_gameState.musicStartTime = SDL_GetTicks();
-    
+
     s_gameState.debug = false;
     if (s_gameState.debug){
-        const double pularParaSegundos = 275.0; 
+        const double pularParaSegundos = 275.0;
         Mix_SetMusicPosition(pularParaSegundos);
         s_gameState.musicStartTime = SDL_GetTicks() - (Uint32)(pularParaSegundos * 1000.0);
     }
@@ -310,7 +398,7 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
 }
 
 /* =========================
-   Eventos
+   Eventos (sem uso de deltaTime aqui)
    ========================= */
 void Game_HandleEvent(SDL_Event* e) {
     if (e->type == SDL_QUIT) { s_gameState.gameIsRunning = false; return; }
@@ -366,7 +454,7 @@ void Game_HandleEvent(SDL_Event* e) {
                             acertouNota = true;
                             s_gameState.combo++;
                             if (s_gameState.combo > 0 && s_gameState.combo % 50 == 0) s_gameState.comboPulseTimer = 0.3f;
-                            
+
                             int points = 0; int feedbackType = 0;
                             if (dist <= HIT_WINDOW_OTIMO) {
                                 points = 20; feedbackType = 0; s_gameState.health += 2.0f;
@@ -380,7 +468,7 @@ void Game_HandleEvent(SDL_Event* e) {
                             }
 
                             SpawnFeedbackText(feedbackType, checker->rect);
-                            
+
                             if (nota->duration > 0) {
                                 nota->estado = NOTA_SEGURANDO;
                             } else {
@@ -407,7 +495,7 @@ void Game_HandleEvent(SDL_Event* e) {
                     int checkerIndex = -1;
                     if (teclaSolta == SDLK_z) checkerIndex = 0; else if (teclaSolta == SDLK_x) checkerIndex = 1; else if (teclaSolta == SDLK_c) checkerIndex = 2; else break;
                     Checker* checker = &s_gameState.checkers[checkerIndex];
-                    
+
                     for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
                         Nota* nota = &s_gameState.faseAtual->beatmap[i];
                         if (nota->estado == NOTA_SEGURANDO && nota->tecla == teclaSolta) {
@@ -420,8 +508,8 @@ void Game_HandleEvent(SDL_Event* e) {
                                 int points = 0; int feedbackType = 0;
                                 if (dist <= HIT_WINDOW_OTIMO) { points = 40; feedbackType = 0; }
                                 else if (dist <= HIT_WINDOW_BOM) { points = 20; feedbackType = 1; }
-                                else { points = 5; feedbackType = 2; }
-                                
+                                else { points = 5;  feedbackType = 2; }
+
                                 points *= (s_gameState.combo > 0 ? s_gameState.combo : 1);
                                 if (s_gameState.isSpecialActive) points *= 2;
                                 s_gameState.score += points;
@@ -480,7 +568,7 @@ void Game_HandleEvent(SDL_Event* e) {
                 else if (key == SDLK_DOWN) s_gameState.selectedButtonIndex = (s_gameState.selectedButtonIndex + 1) % 3;
                 else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                     switch (s_gameState.selectedButtonIndex) {
-                        case 0: s_gameState.needsRestart = true;  s_gameState.gameIsRunning = false; break; /* Jogar Novamente */
+                        case 0: s_gameState.needsRestart = true;  s_gameState.gameIsRunning = false; break; // Jogar Novamente
                         case 1: s_gameState.nextApplicationState = APP_STATE_MENU; s_gameState.needsRestart = false; s_gameState.gameIsRunning = false; break;
                         case 2: s_gameState.nextApplicationState = APP_STATE_EXIT; s_gameState.gameIsRunning = false; break;
                     }
@@ -513,24 +601,49 @@ void Game_HandleEvent(SDL_Event* e) {
 void Game_Update(float deltaTime) {
     if (s_gameState.debug) s_gameState.health = 100;
 
-    /* Atualiza animação do pandeirista conforme estado */
-    if (g_pandeirista.tex) {
-        if (g_pandeirista.state == PANDE_PLAY) {
-            g_pandeirista.timer += deltaTime;
-            const float frameTime = 1.0f / g_pandeirista.fps;
-            while (g_pandeirista.timer >= frameTime) {
-                g_pandeirista.timer -= frameTime;
-                /* Cicla de 0 até frames-2 (evita o frame de idle) */
-                int loopFrames = g_pandeirista.frames - 1;
-                if (loopFrames <= 0) loopFrames = 1;
-                g_pandeirista.current = (g_pandeirista.current + 1) % loopFrames;
+    // ===== Animações dos personagens =====
+    // 1) Pandeirista: transição IDLE->PLAY quando 1ª nota encostar no contorno
+    if (!g_panStarted && g_pandeirista.tex && s_gameState.gameFlowState == STATE_PLAYING) {
+        for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
+            Nota* n = &s_gameState.faseAtual->beatmap[i];
+            if (n->estado != NOTA_ATIVA) continue;
+
+            // pega x do checker correspondente
+            float cx = 0.f;
+            if      (n->tecla == SDLK_z) cx = s_gameState.checkers[0].rect.x;
+            else if (n->tecla == SDLK_x) cx = s_gameState.checkers[1].rect.x;
+            else if (n->tecla == SDLK_c) cx = s_gameState.checkers[2].rect.x;
+
+            // "encostar no contorno" ~ tolerância da janela OK
+            if (fabsf(n->pos.x - cx) <= HIT_WINDOW_OK) {
+                g_panState  = PAN_STATE_PLAY;
+                g_panStarted = true;
+                break;
             }
-        } else {
-            g_pandeirista.current = PANDE_IDLE_FRAME;
-            g_pandeirista.timer   = 0.0f;
         }
     }
 
+    // Atualiza quadros do pandeirista somente em PLAY
+    if (g_pandeirista.tex && g_panState == PAN_STATE_PLAY) {
+        g_pandeirista.timer += deltaTime;
+        const float frameTime = 1.0f / g_pandeirista.fps;
+        while (g_pandeirista.timer >= frameTime) {
+            g_pandeirista.timer -= frameTime;
+            g_pandeirista.current = (g_pandeirista.current + 1) % g_pandeirista.frames;
+        }
+    }
+
+    // 2) Velho na mesa (anima sempre em loop)
+    if (g_velhoMesa.tex) {
+        g_velhoMesa.timer += deltaTime;
+        const float frameTime = 1.0f / g_velhoMesa.fps;
+        while (g_velhoMesa.timer >= frameTime) {
+            g_velhoMesa.timer -= frameTime;
+            g_velhoMesa.current = (g_velhoMesa.current + 1) % g_velhoMesa.frames;
+        }
+    }
+
+    // ===== Lógica do jogo =====
     switch (s_gameState.gameFlowState) {
         case STATE_PLAYING: {
             Uint32 tempoAtual = SDL_GetTicks() - s_gameState.musicStartTime;
@@ -562,28 +675,14 @@ void Game_Update(float deltaTime) {
                 }
             }
 
-            /* Atualiza notas e detecta “contato com contorno” para disparar o pandeirista */
             for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
                 Nota* nota = &s_gameState.faseAtual->beatmap[i];
                 if (nota->estado == NOTA_ATIVA || nota->estado == NOTA_SEGURANDO) {
                     Note_Update(nota, deltaTime);
                 }
-                
-                float checker_pos_x = 0.0f;
-                for (int j = 0; j < 3; ++j)
-                    if (s_gameState.checkers[j].tecla == nota->tecla) { checker_pos_x = s_gameState.checkers[j].rect.x; break; }
 
-                /* Dispara o pandeirista quando a PRIMEIRA nota encostar no contorno */
-                if (!s_gameState.pandeHasStarted && nota->estado == NOTA_ATIVA) {
-                    float dist = fabsf(nota->pos.x - checker_pos_x);
-                    if (dist <= HIT_WINDOW_OK) {
-                        s_gameState.pandeHasStarted = true;
-                        g_pandeirista.state = PANDE_PLAY;
-                        /* opcional: iniciar ciclo em 0 para não ficar colado ao idle */
-                        g_pandeirista.current = 0;
-                        g_pandeirista.timer = 0.0f;
-                    }
-                }
+                float checker_pos_x = 0;
+                for (int j=0; j<3; ++j) if (s_gameState.checkers[j].tecla == nota->tecla) { checker_pos_x = s_gameState.checkers[j].rect.x; break; }
 
                 if (nota->estado == NOTA_ATIVA) {
                     if (nota->pos.x < (checker_pos_x - HIT_WINDOW_OK)) {
@@ -629,23 +728,13 @@ void Game_Update(float deltaTime) {
                 if (s_gameState.currentSongLeaderboard)
                     for (int i = 0; i < MAX_LEADERBOARD_ENTRIES; ++i)
                         if (s_gameState.finalScore > s_gameState.currentSongLeaderboard->scores[i].score) { s_gameState.newHighscoreRank = i; break; }
-
-                /* volta pandeirista ao idle */
-                g_pandeirista.state   = PANDE_IDLE;
-                g_pandeirista.current = PANDE_IDLE_FRAME;
-                g_pandeirista.timer   = 0.0f;
             }
-            
+
             if (s_gameState.health <= 0) {
                 s_gameState.gameFlowState = STATE_GAMEOVER;
                 Mix_HaltMusic();
                 if (s_gameState.failSound) Mix_PlayChannel(-1, s_gameState.failSound, 0);
                 s_gameState.selectedButtonIndex = 0;
-
-                /* garante idle no fim */
-                g_pandeirista.state   = PANDE_IDLE;
-                g_pandeirista.current = PANDE_IDLE_FRAME;
-                g_pandeirista.timer   = 0.0f;
             }
 
             if (s_gameState.health < 0.0f) s_gameState.health = 0.0f;
@@ -683,15 +772,19 @@ void Game_Render(SDL_Renderer* renderer) {
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
-    /* 1) Fundo */
+    // 1) Fundo
     DrawCityBackground(renderer);
 
-    /* 2) Pista de ritmo */
+    // 2) Personagens na rua
+    DrawPandeirista(renderer);
+    DrawVelhoMesa(renderer);
+
+    // 3) Pista
     SDL_Rect trackRect = {RHYTHM_TRACK_POS_X, RHYTHM_TRACK_POS_Y, RHYTHM_TRACK_WIDTH, RHYTHM_TRACK_HEIGHT};
     SDL_RenderCopy(renderer, s_gameState.faseAtual->rhythmTrack, NULL, &trackRect);
     rectangleRGBA(renderer, trackRect.x, trackRect.y, trackRect.x + trackRect.w, trackRect.y + trackRect.h, 255, 255, 255, 180);
 
-    /* 3) Checkers (contornos + preenchimento + teclas) */
+    // 4) Checkers
     for (int i = 0; i < 3; ++i) {
         Checker* checker = &s_gameState.checkers[i];
         Sint16 centerX = checker->rect.x + (checker->rect.w / 2);
@@ -711,23 +804,14 @@ void Game_Render(SDL_Renderer* renderer) {
         }
     }
 
-    /* 4) Pandeirista (acima dos contornos) */
-    if (g_pandeirista.tex) {
-        SDL_Rect src = { g_pandeirista.current * g_pandeirista.frameW, 0, g_pandeirista.frameW, g_pandeirista.frameH };
-        SDL_FRect dst = { g_pandeirista.pos.x, g_pandeirista.pos.y,
-                          g_pandeirista.frameW * g_pandeirista.scale,
-                          g_pandeirista.frameH * g_pandeirista.scale };
-        SDL_RenderCopyF(renderer, g_pandeirista.tex, &src, &dst);
-    }
-
-    /* 5) Notas */
+    // 5) Notas
     for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
         Nota* nota = &s_gameState.faseAtual->beatmap[i];
         float checker_pos_x = (nota->tecla == SDLK_z) ? CHECKER_Z_X : (nota->tecla == SDLK_x) ? CHECKER_X_X : CHECKER_C_X;
         Note_Render(nota, renderer, checker_pos_x);
     }
 
-    /* Confetes */
+    // 6) Confetes
     for (int i = 0; i < MAX_CONFETTI; ++i) {
         if (s_gameState.confetti[i].isActive) {
             ConfettiParticle* p = &s_gameState.confetti[i];
@@ -735,7 +819,7 @@ void Game_Render(SDL_Renderer* renderer) {
         }
     }
 
-    /* Feedbacks */
+    // 7) Feedback (Ótimo/Bom/Ok)
     for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
         if (s_gameState.feedbackTexts[i].isActive) {
             FeedbackText* ft = &s_gameState.feedbackTexts[i];
@@ -751,7 +835,7 @@ void Game_Render(SDL_Renderer* renderer) {
         }
     }
 
-    /* Score / Combo */
+    // 8) Score/Combo
     UpdateTextureCache(renderer);
     if (s_gameState.scoreTexture.texture) {
         SDL_Rect dst = {20, 20, s_gameState.scoreTexture.w, s_gameState.scoreTexture.h};
@@ -765,31 +849,26 @@ void Game_Render(SDL_Renderer* renderer) {
         SDL_RenderCopy(renderer, s_gameState.comboTexture.texture, NULL, &dst);
     }
 
-    /* Barra de Vida */
-    {
-        int barWidth = 400, barHeight = 20, barX = (SCREEN_WIDTH / 2) - (barWidth / 2), barY = 20;
-        int currentHealthWidth = (int)((s_gameState.health / 100.0f) * barWidth);
-        SDL_Color healthColor = {50, 205, 50, 255};
-        if (s_gameState.health < 50) healthColor = (SDL_Color){255, 215, 0, 255};
-        if (s_gameState.health < 25) healthColor = (SDL_Color){220, 20, 60, 255};
-        boxRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 50, 50, 50, 200);
-        if (currentHealthWidth > 0) boxRGBA(renderer, barX, barY, barX + currentHealthWidth, barY + barHeight, healthColor.r, healthColor.g, healthColor.b, 255);
-        rectangleRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 255, 255, 255, 255);
-    }
+    // 9) Barras de Vida e Especial
+    int barWidth = 400, barHeight = 20, barX = (SCREEN_WIDTH / 2) - (barWidth / 2), barY = 20;
+    int currentHealthWidth = (int)((s_gameState.health / 100.0f) * barWidth);
+    SDL_Color healthColor = {50, 205, 50, 255};
+    if (s_gameState.health < 50) healthColor = (SDL_Color){255, 215, 0, 255};
+    if (s_gameState.health < 25) healthColor = (SDL_Color){220, 20, 60, 255};
+    boxRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 50, 50, 50, 200);
+    if (currentHealthWidth > 0) boxRGBA(renderer, barX, barY, barX + currentHealthWidth, barY + barHeight, healthColor.r, healthColor.g, healthColor.b, 255);
+    rectangleRGBA(renderer, barX, barY, barX + barWidth, barY + barHeight, 255, 255, 255, 255);
 
-    /* Barra de Especial */
-    {
-        int specialBarWidth = 400, specialBarHeight = 15;
-        int specialBarX = (SCREEN_WIDTH / 2) - (specialBarWidth / 2);
-        int specialBarY = RHYTHM_TRACK_POS_Y + RHYTHM_TRACK_HEIGHT + 10;
-        int currentSpecialWidth = (int)((s_gameState.specialMeter / 100.0f) * specialBarWidth);
-        SDL_Color specialColor = (s_gameState.specialMeter >= 100.0f) ? (SDL_Color){255,223,0,255} : (SDL_Color){0,191,255,255};
-        boxRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 50, 50, 50, 200);
-        if (currentSpecialWidth > 0) boxRGBA(renderer, specialBarX, specialBarY, specialBarX + currentSpecialWidth, specialBarY + specialBarHeight, specialColor.r, specialColor.g, specialColor.b, 255);
-        rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
-    }
+    int specialBarWidth = 400, specialBarHeight = 15;
+    int specialBarX = (SCREEN_WIDTH / 2) - (specialBarWidth / 2);
+    int specialBarY = RHYTHM_TRACK_POS_Y + RHYTHM_TRACK_HEIGHT + 10;
+    int currentSpecialWidth = (int)((s_gameState.specialMeter / 100.0f) * specialBarWidth);
+    SDL_Color specialColor = (s_gameState.specialMeter >= 100.0f) ? (SDL_Color){255,223,0,255} : (SDL_Color){0,191,255,255};
+    boxRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 50, 50, 50, 200);
+    if (currentSpecialWidth > 0) boxRGBA(renderer, specialBarX, specialBarY, specialBarX + currentSpecialWidth, specialBarY + specialBarHeight, specialColor.r, specialColor.g, specialColor.b, 255);
+    rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
 
-    /* Telas de pause/game over/resultados (inalteradas no visual) */
+    // 10) Telas de Pause/GameOver/Resultados (inalteradas)
     if (s_gameState.gameFlowState == STATE_GAMEOVER && s_gameState.font) {
         boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 200);
         RenderText(renderer, s_gameState.font, "FIM DE JOGO", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 3, (SDL_Color){255, 0, 0, 255}, true);
@@ -999,12 +1078,12 @@ void Game_Shutdown() {
 
     for (int i = 0; i < 3; i++) {
         if (s_gameState.checkerContornoTex[i]) SDL_DestroyTexture(s_gameState.checkerContornoTex[i]);
-        if (s_gameState.checkerKeyTex[i]) SDL_DestroyTexture(s_gameState.checkerKeyTex[i]);
+        if (s_gameState.checkerKeyTex[i])      SDL_DestroyTexture(s_gameState.checkerKeyTex[i]);
     }
     for (int i = 0; i < 3; i++) if (s_gameState.feedbackTextures[i]) SDL_DestroyTexture(s_gameState.feedbackTextures[i]);
 
     if (s_gameState.hitSpritesheet) SDL_DestroyTexture(s_gameState.hitSpritesheet);
-    if (s_gameState.failSound) Mix_FreeChunk(s_gameState.failSound);
+    if (s_gameState.failSound)      Mix_FreeChunk(s_gameState.failSound);
 
     if (s_gameState.scoreTexture.texture) SDL_DestroyTexture(s_gameState.scoreTexture.texture);
     if (s_gameState.comboTexture.texture) SDL_DestroyTexture(s_gameState.comboTexture.texture);
@@ -1012,9 +1091,10 @@ void Game_Shutdown() {
     free(s_gameState.confetti);
     free(s_gameState.feedbackTexts);
 
-    /* Libera BG e pandeirista */
-    if (g_bgCity) { SDL_DestroyTexture(g_bgCity); g_bgCity = NULL; }
+    // Sprites e BG
     if (g_pandeirista.tex) { SDL_DestroyTexture(g_pandeirista.tex); g_pandeirista.tex = NULL; }
+    if (g_velhoMesa.tex)    { SDL_DestroyTexture(g_velhoMesa.tex);    g_velhoMesa.tex = NULL; }
+    if (g_bgCity)           { SDL_DestroyTexture(g_bgCity);           g_bgCity = NULL; }
 }
 
 bool Game_NeedsRestart() { return s_gameState.needsRestart; }
