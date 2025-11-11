@@ -35,21 +35,21 @@
 #define VELHO_FPS              4.0f
 #define VELHO_SCALE            0.30f
 #define VELHO_FACE_LEFT        1          // 1 = espelha horizontalmente
-#define VELHO_OFFSET_X         (-60.0f)  // solicitado
-#define VELHO_OFFSET_Y         (-60.0f)   // solicitado
+#define VELHO_OFFSET_X         (-60.0f)  
+#define VELHO_OFFSET_Y         (-60.0f)   
 
-// Linha de referência "chão" da rua (ancora os pés dos personagens)
+// “chão” onde os personagens se ancoram
 #define STREET_LINE_Y          (RHYTHM_TRACK_POS_Y - 64)
 
 /* =========================
-   Estruturas de apoio
+   Estruturas de sprites
    ========================= */
 typedef struct {
     SDL_Texture* tex;
     int   frameW, frameH;
     int   frames, current;
     float fps, timer, scale;
-    SDL_FPoint pos; // canto superior-esquerdo do destino após escala
+    SDL_FPoint pos; // canto sup-esq do destino após escala
 } AnimatedSprite;
 
 typedef enum {
@@ -57,19 +57,26 @@ typedef enum {
     PAN_STATE_PLAY = 1
 } PandeiristaState;
 
+typedef enum {
+    VELHO_STATE_IDLE = 0,
+    VELHO_STATE_PLAY = 1
+} VelhoState;
+
 /* =========================
-   Estado global de sprites
+   Sprites globais
    ========================= */
-static SDL_Texture*    g_bgCity       = NULL;
+static SDL_Texture*     g_bgCity     = NULL;
 
-static AnimatedSprite  g_pandeirista  = {0};
+static AnimatedSprite   g_pandeirista = {0};
 static PandeiristaState g_panState    = PAN_STATE_IDLE;
-static bool            g_panStarted   = false; // trava de "primeiro contato"
+static bool             g_panStarted  = false;
 
-static AnimatedSprite  g_velhoMesa    = {0};
+static AnimatedSprite   g_velhoMesa   = {0};
+static VelhoState       g_velhoState  = VELHO_STATE_IDLE;
+static bool             g_velhoStarted= false;
 
 /* =========================
-   Funções auxiliares de render
+   Render helpers
    ========================= */
 static void DrawCityBackground(SDL_Renderer* r) {
     if (!g_bgCity) return;
@@ -78,12 +85,9 @@ static void DrawCityBackground(SDL_Renderer* r) {
     SDL_QueryTexture(g_bgCity, NULL, NULL, &tw, &th);
     if (tw <= 0 || th <= 0) return;
 
-    // Preenche largura total sem bordas pretas
     float scaleW = (float)SCREEN_WIDTH / (float)tw;
     int dstW = SCREEN_WIDTH;
     int dstH = (int)(th * scaleW);
-
-    // Ancorar base do BG na borda da pista
     int dstX = 0;
     int dstY = RHYTHM_TRACK_POS_Y - dstH;
 
@@ -94,21 +98,15 @@ static void DrawCityBackground(SDL_Renderer* r) {
 static void DrawPandeirista(SDL_Renderer* r) {
     if (!g_pandeirista.tex) return;
 
-    // Se estiver ocioso, travar no último frame (pedido do usuário)
-    if (g_panState == PAN_STATE_IDLE) {
+    if (g_panState == PAN_STATE_IDLE) // trava no último frame no IDLE
         g_pandeirista.current = g_pandeirista.frames - 1;
-    }
 
     SDL_Rect src = {
-        g_pandeirista.current * g_pandeirista.frameW,
-        0,
-        g_pandeirista.frameW,
-        g_pandeirista.frameH
+        g_pandeirista.current * g_pandeirista.frameW, 0,
+        g_pandeirista.frameW, g_pandeirista.frameH
     };
-
     int w = (int)(g_pandeirista.frameW * g_pandeirista.scale);
     int h = (int)(g_pandeirista.frameH * g_pandeirista.scale);
-
     SDL_Rect dst = { (int)g_pandeirista.pos.x, (int)g_pandeirista.pos.y, w, h };
     SDL_RenderCopy(r, g_pandeirista.tex, &src, &dst);
 }
@@ -116,28 +114,26 @@ static void DrawPandeirista(SDL_Renderer* r) {
 static void DrawVelhoMesa(SDL_Renderer* r) {
     if (!g_velhoMesa.tex) return;
 
-    SDL_Rect src = {
-        g_velhoMesa.current * g_velhoMesa.frameW,
-        0,
-        g_velhoMesa.frameW,
-        g_velhoMesa.frameH
-    };
+    if (g_velhoState == VELHO_STATE_IDLE) // mesmo comportamento do pandeirista
+        g_velhoMesa.current = g_velhoMesa.frames - 1;
 
+    SDL_Rect src = {
+        g_velhoMesa.current * g_velhoMesa.frameW, 0,
+        g_velhoMesa.frameW, g_velhoMesa.frameH
+    };
     int w = (int)(g_velhoMesa.frameW * g_velhoMesa.scale);
     int h = (int)(g_velhoMesa.frameH * g_velhoMesa.scale);
-
     SDL_Rect dst = {
         (int)(g_velhoMesa.pos.x + VELHO_OFFSET_X),
         (int)(g_velhoMesa.pos.y + VELHO_OFFSET_Y),
         w, h
     };
-
     SDL_RendererFlip flip = VELHO_FACE_LEFT ? SDL_FLIP_HORIZONTAL : SDL_FLIP_NONE;
     SDL_RenderCopyEx(r, g_velhoMesa.tex, &src, &dst, 0.0, NULL, flip);
 }
 
 /* =========================
-   (Restante do estado do jogo)
+   (Resto do estado do jogo)
    ========================= */
 #define MAX_CONFETTI 200
 #define SPECIAL_DURATION 10.0f
@@ -291,7 +287,7 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
     s_gameState.faseAtual = Fase_CarregarDeArquivo(renderer, songFilePath);
     if (!s_gameState.faseAtual) return 0;
 
-    // Background único
+    // Background
     g_bgCity = IMG_LoadTexture(renderer, BG_PATH);
     if (!g_bgCity) {
         SDL_Log("Falha ao carregar background '%s': %s", BG_PATH, IMG_GetError());
@@ -329,16 +325,18 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
         g_velhoMesa.frames  = VELHO_FRAMES;
         g_velhoMesa.frameW  = tw / VELHO_FRAMES;
         g_velhoMesa.frameH  = th;
-        g_velhoMesa.current = 0;
+        g_velhoMesa.current = VELHO_FRAMES - 1; // idle no último frame
         g_velhoMesa.fps     = VELHO_FPS;
         g_velhoMesa.timer   = 0.0f;
         g_velhoMesa.scale   = VELHO_SCALE;
 
         float w = g_velhoMesa.frameW * g_velhoMesa.scale;
         float h = g_velhoMesa.frameH * g_velhoMesa.scale;
-        // base = centro; offsets serão aplicados na hora do draw
         g_velhoMesa.pos.x = (SCREEN_WIDTH - w) * 0.5f;
         g_velhoMesa.pos.y = STREET_LINE_Y - h;
+
+        g_velhoState   = VELHO_STATE_IDLE;
+        g_velhoStarted = false;
     }
 
     Leaderboard_Load(&s_leaderboardData);
@@ -398,7 +396,7 @@ int Game_Init(SDL_Renderer* renderer, const char* songFilePath) {
 }
 
 /* =========================
-   Eventos (sem uso de deltaTime aqui)
+   Eventos
    ========================= */
 void Game_HandleEvent(SDL_Event* e) {
     if (e->type == SDL_QUIT) { s_gameState.gameIsRunning = false; return; }
@@ -568,7 +566,7 @@ void Game_HandleEvent(SDL_Event* e) {
                 else if (key == SDLK_DOWN) s_gameState.selectedButtonIndex = (s_gameState.selectedButtonIndex + 1) % 3;
                 else if (key == SDLK_RETURN || key == SDLK_KP_ENTER) {
                     switch (s_gameState.selectedButtonIndex) {
-                        case 0: s_gameState.needsRestart = true;  s_gameState.gameIsRunning = false; break; // Jogar Novamente
+                        case 0: s_gameState.needsRestart = true;  s_gameState.gameIsRunning = false; break;
                         case 1: s_gameState.nextApplicationState = APP_STATE_MENU; s_gameState.needsRestart = false; s_gameState.gameIsRunning = false; break;
                         case 2: s_gameState.nextApplicationState = APP_STATE_EXIT; s_gameState.gameIsRunning = false; break;
                     }
@@ -601,49 +599,50 @@ void Game_HandleEvent(SDL_Event* e) {
 void Game_Update(float deltaTime) {
     if (s_gameState.debug) s_gameState.health = 100;
 
-    // ===== Animações dos personagens =====
-    // 1) Pandeirista: transição IDLE->PLAY quando 1ª nota encostar no contorno
-    if (!g_panStarted && g_pandeirista.tex && s_gameState.gameFlowState == STATE_PLAYING) {
+    /* -------- Disparador comum (primeiro contato com contorno) -------- */
+    bool firstContactNow = false;
+    if (s_gameState.gameFlowState == STATE_PLAYING) {
         for (int i = 0; i < s_gameState.faseAtual->totalNotas; ++i) {
             Nota* n = &s_gameState.faseAtual->beatmap[i];
             if (n->estado != NOTA_ATIVA) continue;
 
-            // pega x do checker correspondente
             float cx = 0.f;
             if      (n->tecla == SDLK_z) cx = s_gameState.checkers[0].rect.x;
             else if (n->tecla == SDLK_x) cx = s_gameState.checkers[1].rect.x;
             else if (n->tecla == SDLK_c) cx = s_gameState.checkers[2].rect.x;
 
-            // "encostar no contorno" ~ tolerância da janela OK
-            if (fabsf(n->pos.x - cx) <= HIT_WINDOW_OK) {
-                g_panState  = PAN_STATE_PLAY;
-                g_panStarted = true;
-                break;
+            if (fabsf(n->pos.x - cx) <= HIT_WINDOW_OK) { firstContactNow = true; break; }
+        }
+    }
+    if (firstContactNow) {
+        if (!g_panStarted)   { g_panStarted = true;   g_panState   = PAN_STATE_PLAY; }
+        if (!g_velhoStarted) { g_velhoStarted = true; g_velhoState = VELHO_STATE_PLAY; }
+    }
+
+    /* -------- Avanço de quadros (somente jogando) -------- */
+    if (s_gameState.gameFlowState == STATE_PLAYING) {
+        // pandeirista só anima em PLAY
+        if (g_pandeirista.tex && g_panState == PAN_STATE_PLAY) {
+            g_pandeirista.timer += deltaTime;
+            const float frameTime = 1.0f / g_pandeirista.fps;
+            while (g_pandeirista.timer >= frameTime) {
+                g_pandeirista.timer -= frameTime;
+                g_pandeirista.current = (g_pandeirista.current + 1) % g_pandeirista.frames;
+            }
+        }
+        // velho idem
+        if (g_velhoMesa.tex && g_velhoState == VELHO_STATE_PLAY) {
+            g_velhoMesa.timer += deltaTime;
+            const float frameTime = 1.0f / g_velhoMesa.fps;
+            while (g_velhoMesa.timer >= frameTime) {
+                g_velhoMesa.timer -= frameTime;
+                g_velhoMesa.current = (g_velhoMesa.current + 1) % g_velhoMesa.frames;
             }
         }
     }
+    // Demais estados (PAUSE/RESULTS/GAMEOVER): não avançam — frames ficam “congelados”.
 
-    // Atualiza quadros do pandeirista somente em PLAY
-    if (g_pandeirista.tex && g_panState == PAN_STATE_PLAY) {
-        g_pandeirista.timer += deltaTime;
-        const float frameTime = 1.0f / g_pandeirista.fps;
-        while (g_pandeirista.timer >= frameTime) {
-            g_pandeirista.timer -= frameTime;
-            g_pandeirista.current = (g_pandeirista.current + 1) % g_pandeirista.frames;
-        }
-    }
-
-    // 2) Velho na mesa (anima sempre em loop)
-    if (g_velhoMesa.tex) {
-        g_velhoMesa.timer += deltaTime;
-        const float frameTime = 1.0f / g_velhoMesa.fps;
-        while (g_velhoMesa.timer >= frameTime) {
-            g_velhoMesa.timer -= frameTime;
-            g_velhoMesa.current = (g_velhoMesa.current + 1) % g_velhoMesa.frames;
-        }
-    }
-
-    // ===== Lógica do jogo =====
+    /* -------- Lógica do jogo -------- */
     switch (s_gameState.gameFlowState) {
         case STATE_PLAYING: {
             Uint32 tempoAtual = SDL_GetTicks() - s_gameState.musicStartTime;
@@ -761,6 +760,7 @@ void Game_Update(float deltaTime) {
         case STATE_RESULTS_NAME_ENTRY:
         case STATE_RESULTS_LEADERBOARD:
         case STATE_GAMEOVER:
+            // congelado: sem avanço de frames
             break;
     }
 }
@@ -775,7 +775,7 @@ void Game_Render(SDL_Renderer* renderer) {
     // 1) Fundo
     DrawCityBackground(renderer);
 
-    // 2) Personagens na rua
+    // 2) Personagens
     DrawPandeirista(renderer);
     DrawVelhoMesa(renderer);
 
@@ -819,7 +819,7 @@ void Game_Render(SDL_Renderer* renderer) {
         }
     }
 
-    // 7) Feedback (Ótimo/Bom/Ok)
+    // 7) Feedback
     for (int i = 0; i < MAX_FEEDBACK_TEXTS; ++i) {
         if (s_gameState.feedbackTexts[i].isActive) {
             FeedbackText* ft = &s_gameState.feedbackTexts[i];
@@ -849,7 +849,7 @@ void Game_Render(SDL_Renderer* renderer) {
         SDL_RenderCopy(renderer, s_gameState.comboTexture.texture, NULL, &dst);
     }
 
-    // 9) Barras de Vida e Especial
+    // 9) Barras
     int barWidth = 400, barHeight = 20, barX = (SCREEN_WIDTH / 2) - (barWidth / 2), barY = 20;
     int currentHealthWidth = (int)((s_gameState.health / 100.0f) * barWidth);
     SDL_Color healthColor = {50, 205, 50, 255};
@@ -868,7 +868,7 @@ void Game_Render(SDL_Renderer* renderer) {
     if (currentSpecialWidth > 0) boxRGBA(renderer, specialBarX, specialBarY, specialBarX + currentSpecialWidth, specialBarY + specialBarHeight, specialColor.r, specialColor.g, specialColor.b, 255);
     rectangleRGBA(renderer, specialBarX, specialBarY, specialBarX + specialBarWidth, specialBarY + specialBarHeight, 255, 255, 255, 255);
 
-    // 10) Telas de Pause/GameOver/Resultados (inalteradas)
+    // 10) Telas de Pause/GameOver/Resultados
     if (s_gameState.gameFlowState == STATE_GAMEOVER && s_gameState.font) {
         boxRGBA(renderer, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, 0, 0, 0, 200);
         RenderText(renderer, s_gameState.font, "FIM DE JOGO", SCREEN_WIDTH / 2, SCREEN_HEIGHT / 3, (SDL_Color){255, 0, 0, 255}, true);
@@ -1091,10 +1091,9 @@ void Game_Shutdown() {
     free(s_gameState.confetti);
     free(s_gameState.feedbackTexts);
 
-    // Sprites e BG
     if (g_pandeirista.tex) { SDL_DestroyTexture(g_pandeirista.tex); g_pandeirista.tex = NULL; }
-    if (g_velhoMesa.tex)    { SDL_DestroyTexture(g_velhoMesa.tex);    g_velhoMesa.tex = NULL; }
-    if (g_bgCity)           { SDL_DestroyTexture(g_bgCity);           g_bgCity = NULL; }
+    if (g_velhoMesa.tex)    { SDL_DestroyTexture(g_velhoMesa.tex);  g_velhoMesa.tex = NULL; }
+    if (g_bgCity)           { SDL_DestroyTexture(g_bgCity);         g_bgCity = NULL; }
 }
 
 bool Game_NeedsRestart() { return s_gameState.needsRestart; }
