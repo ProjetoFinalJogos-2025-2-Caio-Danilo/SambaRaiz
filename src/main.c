@@ -10,6 +10,10 @@
 #include "app.h"
 #include "menu.h" 
 
+// --- Definição das Variáveis Globais de Resolução ---
+int SCREEN_WIDTH = 1280;  // Valor padrão inicial
+int SCREEN_HEIGHT = 720;  // Valor padrão inicial
+
 // Inicializa todos os subsistemas da SDL de uma só vez.
 // Retorna 'true' em caso de sucesso, 'false' em caso de falha.
 bool App_Init() {
@@ -57,13 +61,31 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
-    // Cria a janela e o renderizador.
-    SDL_Window* window = SDL_CreateWindow("Samba Raiz", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN);
+    // --- LÓGICA DE RESOLUÇÃO DINÂMICA ---
+    SDL_DisplayMode dm;
+    if (SDL_GetCurrentDisplayMode(0, &dm) != 0) {
+        printf("Aviso: Falha ao obter resolucao do monitor (%s). Usando padrao 1280x720.\n", SDL_GetError());
+    } else {
+        // Define a resolução do jogo para ser 80% ou 90% da tela do usuário (para modo janela)
+        SCREEN_WIDTH = dm.w;
+        SCREEN_HEIGHT = dm.h;
+    }
+
+    // Cria a janela (flag RESIZABLE para permitir redimensionar, ou FULLSCREEN_DESKTOP)
+    SDL_Window* window = SDL_CreateWindow("Samba Raiz", 
+                                          SDL_WINDOWPOS_CENTERED, 
+                                          SDL_WINDOWPOS_CENTERED, 
+                                          SCREEN_WIDTH, SCREEN_HEIGHT, 
+                                          SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN_DESKTOP); // Usando Fullscreen Desktop para preencher a tela
+    
     if (!window) {
         printf("ERRO: Janela nao pode ser criada! SDL_Error: %s\n", SDL_GetError());
-        App_Shutdown(); // Limpa o que já foi inicializado
+        App_Shutdown();
         return -1;
     }
+
+    // Atualiza as variáveis globais com o tamanho real da janela criada (caso o sistema mude)
+    SDL_GetWindowSize(window, &SCREEN_WIDTH, &SCREEN_HEIGHT);
 
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {

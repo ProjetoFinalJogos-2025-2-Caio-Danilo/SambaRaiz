@@ -2,11 +2,11 @@
 #define DEFS_H
 
 // --- Configurações da Janela ---
-#define SCREEN_WIDTH 1280
-#define SCREEN_HEIGHT 720
+extern int SCREEN_WIDTH;
+extern int SCREEN_HEIGHT;
 
 // --- Pista de Ritmo ---
-#define RHYTHM_TRACK_WIDTH 1280 + 50 // Largura da sua imagem de pista
+#define RHYTHM_TRACK_WIDTH 1920 // Largura da sua imagem de pista
 #define RHYTHM_TRACK_HEIGHT 150 // Altura da sua imagem de pista
 #define RHYTHM_TRACK_POS_X (0) // Quase na direita
 #define RHYTHM_TRACK_POS_Y (SCREEN_HEIGHT - RHYTHM_TRACK_HEIGHT - 50) // Perto do fundo
